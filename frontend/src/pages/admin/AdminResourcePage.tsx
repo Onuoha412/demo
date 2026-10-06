@@ -1,0 +1,26 @@
+import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useParams } from "react-router-dom";
+import { PageContainer } from "../../components/common/PageContainer";
+import { LoadingState } from "../../components/common/LoadingState";
+import { ErrorState } from "../../components/common/ErrorState";
+import { useAuthStore } from "../../store/authStore";
+import { createAdminResource, listAdminResource, setAdminQueueStatus, setAdminResourceActive, type AdminResource } from "../../services/admin";
+import { Button } from "../../components/common/Button";
+
+const labels: Record<AdminResource, string> = { organizations: "Organizations", branches: "Branches", services: "Services", counters: "Counters", queues: "Queues", users: "Users" };
+const fields: Record<AdminResource, string[]> = { organizations: ["name", "slug", "description"], branches: ["organization_id", "name", "address", "timezone"], services: ["branch_id", "name", "code", "description", "average_service_minutes"], counters: ["branch_id", "name", "number"], queues: ["service_id", "name", "prefix"], users: [] };
+
+export function AdminResourcePage() {
+  const resource = (useParams().resource ?? "organizations") as AdminResource; const token = useAuthStore((s) => s.token)!; const client = useQueryClient();
+  const [page, setPage] = useState(1); const [search, setSearch] = useState(""); const [role, setRole] = useState(""); const [form, setForm] = useState<Record<string, string>>({});
+  const query = useQuery({ queryKey: ["admin", resource, page, search, role], queryFn: () => listAdminResource(resource, token, page, 20, search, role), enabled: Object.hasOwn(labels, resource) });
+  const create = useMutation({ mutationFn: () => createAdminResource(resource, form, token), onSuccess: () => { setForm({}); void client.invalidateQueries({ queryKey: ["admin", resource] }); } });
+  const toggle = useMutation({ mutationFn: ({ id, active }: { id: string; active: boolean }) => setAdminResourceActive(resource, id, !active, token), onSuccess: () => void client.invalidateQueries({ queryKey: ["admin", resource] }) });
+  const status = useMutation({ mutationFn: ({ id, value }: { id: string; value: "open" | "paused" | "closed" }) => setAdminQueueStatus(id, value, token), onSuccess: () => void client.invalidateQueries({ queryKey: ["admin", resource] }) });
+  if (query.isLoading) return <LoadingState />; if (query.isError || !query.data) return <ErrorState message={`Unable to load ${labels[resource].toLowerCase()}.`} />;
+  return <PageContainer className="py-10"><div className="flex flex-wrap items-end justify-between gap-4"><h1 className="text-4xl font-black">{labels[resource]}</h1><div className="flex gap-2"><input className="rounded-lg border p-2" placeholder="Search" value={search} onChange={(e) => { setPage(1); setSearch(e.target.value); }} />{resource === "users" && <select className="rounded-lg border p-2" aria-label="Filter by role" value={role} onChange={(e) => { setPage(1); setRole(e.target.value); }}><option value="">All roles</option><option value="customer">Customer</option><option value="staff">Staff</option><option value="admin">Admin</option></select>}</div></div>
+    {fields[resource].length > 0 && <form className="mt-6 grid gap-3 rounded-2xl bg-white p-5 sm:grid-cols-3" onSubmit={(e) => { e.preventDefault(); create.mutate(); }}>{fields[resource].map((field) => <input key={field} required={field !== "description" && field !== "address"} className="rounded-lg border p-2" placeholder={field.replaceAll("_", " ")} value={form[field] ?? ""} onChange={(e) => setForm({ ...form, [field]: e.target.value })} />)}<Button type="submit" disabled={create.isPending}>Create</Button></form>}
+    <div className="mt-6 overflow-x-auto rounded-2xl bg-white"><table className="w-full text-left text-sm"><thead className="bg-ink/5"><tr><th className="p-4">Name / ID</th><th className="p-4">Status</th><th className="p-4">Actions</th></tr></thead><tbody>{query.data.items.map((item) => { const row = item as Record<string, unknown>; const id = String(row.id); const active = row.is_active as boolean | undefined; return <tr className="border-t" key={id}><td className="p-4 font-semibold">{String(row.name ?? row.full_name ?? id)}</td><td className="p-4 capitalize">{String(row.status ?? (active === undefined ? "—" : active ? "active" : "inactive"))}</td><td className="flex flex-wrap gap-2 p-4">{active !== undefined && <Button variant="secondary" onClick={() => toggle.mutate({ id, active })}>{active ? "Deactivate" : "Activate"}</Button>}{resource === "queues" && <><Button variant="secondary" onClick={() => status.mutate({ id, value: "open" })}>Open</Button><Button variant="secondary" onClick={() => status.mutate({ id, value: "paused" })}>Pause</Button><Button variant="secondary" onClick={() => status.mutate({ id, value: "closed" })}>Close</Button></>}</td></tr>; })}</tbody></table></div>
+    <div className="mt-4 flex gap-3"><Button variant="secondary" disabled={page <= 1} onClick={() => setPage(page - 1)}>Previous</Button><span className="py-3 text-sm">Page {page}</span><Button variant="secondary" disabled={query.data.items.length < 20} onClick={() => setPage(page + 1)}>Next</Button></div></PageContainer>;
+}
