@@ -3,8 +3,18 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="referrer" content="no-referrer" />
     <meta name="description" content="QueueLess intelligent wait-time management" />
     <title>QueueLess</title>
+    <script>
+      const fallbackPath = sessionStorage.getItem("queueless:pages-path");
+      if (fallbackPath) {
+        sessionStorage.removeItem("queueless:pages-path");
+        if (fallbackPath.startsWith("/") && !fallbackPath.startsWith("//")) {
+          history.replaceState(null, "", fallbackPath);
+        }
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>

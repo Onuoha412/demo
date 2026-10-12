@@ -9,7 +9,9 @@ class QueueNumberService:
 
     def next_number(self, session: Session, queue: Queue) -> int:
         locked_queue = session.scalar(
-            select(Queue).where(Queue.id == queue.id).with_for_update()
+            select(Queue)
+            .where(Queue.id == queue.id)
+            .with_for_update(of=Queue)
         )
         if locked_queue is None:
             raise ValueError("Queue not found")

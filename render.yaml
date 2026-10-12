@@ -1,0 +1,56 @@
+services:
+  - type: web
+    name: queueless-api
+    runtime: python
+    plan: starter
+    numInstances: 1
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /ready
+    autoDeployTrigger: checksPass
+    disk:
+      name: queueless-data
+      mountPath: /var/data
+      sizeGB: 50
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: APP_NAME
+        value: QueueLess API
+      - key: DATABASE_URL
+        value: sqlite:////var/data/queueless.db
+      - key: SECRET_KEY
+        generateValue: true
+      - key: JWT_SECRET
+        generateValue: true
+      - key: CORS_ORIGINS
+        value: https://dave870-coder.github.io
+      - key: FRONTEND_URL
+        value: https://dave870-coder.github.io/QueueLess-Demo-
+      - key: RESET_PASSWORD_URL
+        value: https://dave870-coder.github.io/QueueLess-Demo-/reset-password
+      - key: EMAIL_MODE
+        value: smtp
+      - key: SMTP_HOST
+        sync: false
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USERNAME
+        sync: false
+      - key: SMTP_PASSWORD
+        sync: false
+      - key: SMTP_FROM
+        sync: false
+      - key: SESSION_COOKIE_SAMESITE
+        value: lax
+      - key: GOOGLE_CLIENT_ID
+        value: 840401675772-rinds134tubnko9a04f6fkpms01vkb4f.apps.googleusercontent.com
+      - key: SENTRY_TRACES_SAMPLE_RATE
+        value: "0.05"
+      - key: JWT_ALGORITHM
+        value: HS256
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: "30"
+      - key: NOTIFICATION_APPROACHING_THRESHOLD
+        value: "3"

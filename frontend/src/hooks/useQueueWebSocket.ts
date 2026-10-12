@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { apiRequest } from "../services/api";
+import { API_BASE, apiRequest } from "../services/api";
+import { captureWebSocketFailure } from "../observability";
 
 export type QueueSocketEvent = {
   event: string;
@@ -10,7 +11,11 @@ export type QueueSocketEvent = {
 };
 
 function socketUrl(queueId: string, ticket?: string) {
-  const base = import.meta.env.VITE_WS_URL || `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}`;
+  const base =
+    import.meta.env.VITE_WS_URL ||
+    (API_BASE
+      ? API_BASE.replace(/^http/, "ws")
+      : `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}`);
   const params = ticket ? `?ticket=${encodeURIComponent(ticket)}` : "?public=1";
   return `${base.replace(/\/$/, "")}/ws/queues/${queueId}${params}`;
 }
@@ -28,7 +33,9 @@ export function useQueueWebSocket(queueId: string | undefined, token?: string) {
     if (!queueId) return;
     let stopped = false;
     let retryTimer: number | undefined;
-    let staleTimer: number | undefined;
+    const staleTimer = window.setInterval(() => {
+      if (lastEventRef.current && Date.now() - lastEventRef.current > 60000) setStatus("stale");
+    }, 10000);
     const connect = async () => {
       if (stopped) return;
       setStatus("connecting");
@@ -47,22 +54,35 @@ export function useQueueWebSocket(queueId: string | undefined, token?: string) {
         try {
           const event = JSON.parse(message.data) as QueueSocketEvent;
           setEvent(event);
+          if ("BroadcastChannel" in window) {
+            const channel = new BroadcastChannel("queueless:queue-events");
+            channel.postMessage({ queue_id: event.queue_id, event: event.event });
+            channel.close();
+          }
           const receivedAt = Date.now();
           lastEventRef.current = receivedAt;
           setLastEventAt(receivedAt);
           setStatus("connected");
           void queryClient.invalidateQueries({ queryKey: ["queue-entry"] });
+          void queryClient.invalidateQueries({ queryKey: ["wait-time-prediction"] });
           void queryClient.invalidateQueries({ queryKey: ["staff-dashboard"] });
           void queryClient.invalidateQueries({ queryKey: ["staff-queue", queueId] });
+          void queryClient.invalidateQueries({ queryKey: ["admin-queue", queueId] });
           void queryClient.invalidateQueries({ queryKey: ["public-queue", queueId] });
           void queryClient.invalidateQueries({ queryKey: ["notifications"] });
           if (event.data) queryClient.setQueryData(["queue-event", queueId], event);
         } catch { setStatus("stale"); }
       };
-      socket.onclose = () => {
+      socket.onclose = (closeEvent) => {
         socketRef.current = null;
         if (stopped) return;
         setStatus("disconnected");
+        if (
+          [1006, 1011, 1012, 1013].includes(closeEvent.code) &&
+          retryRef.current >= 2
+        ) {
+          captureWebSocketFailure();
+        }
         const delay = Math.min(30000, 1000 * 2 ** retryRef.current++);
         retryTimer = window.setTimeout(() => void connect(), delay);
       };
@@ -75,9 +95,6 @@ export function useQueueWebSocket(queueId: string | undefined, token?: string) {
       }
     };
     void connect();
-    staleTimer = window.setInterval(() => {
-      if (lastEventRef.current && Date.now() - lastEventRef.current > 60000) setStatus("stale");
-    }, 10000);
     return () => {
       stopped = true;
       if (retryTimer) window.clearTimeout(retryTimer);

@@ -1,5 +1,4 @@
 import uuid
-from unittest.mock import patch
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -80,7 +79,9 @@ def test_approaching_notification_is_created_once(db_session: Session) -> None:
     assert notifications[0].type.value == "queue_approaching"
 
 
-def test_duplicate_approaching_event_only_publishes_once(db_session: Session) -> None:
+def test_approaching_notification_returns_a_realtime_event_only_once(
+    db_session: Session,
+) -> None:
     organization = Organization(name="Realtime Org", slug=str(uuid.uuid4()))
     branch = Branch(name="Main", organization=organization)
     service = Service(name="Admissions", code=str(uuid.uuid4())[:8], branch=branch)
@@ -97,11 +98,18 @@ def test_duplicate_approaching_event_only_publishes_once(db_session: Session) ->
     db_session.flush()
     service_layer = NotificationService(db_session)
 
-    with patch("app.services.notifications.realtime.publish_nowait") as publish:
-        service_layer.approaching(entry)
-        service_layer.approaching(entry)
+    first_event = service_layer.approaching(entry)
+    duplicate_event = service_layer.approaching(entry)
 
-    assert publish.call_count == 1
+    assert first_event == {
+        "queue_id": queue.id,
+        "data": {
+            "queue_entry_id": str(entry.id),
+            "queue_number": entry.queue_number,
+            "people_ahead": 1,
+        },
+    }
+    assert duplicate_event is None
 
 
 def test_queue_status_notifications_use_event_id_for_idempotency(

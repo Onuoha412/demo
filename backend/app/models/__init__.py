@@ -1,10 +1,13 @@
 from .entities import (
+    AuthRateLimit,
+    AuthSession,
     Branch,
     Counter,
     Feedback,
     Notification,
     NotificationPreference,
     Organization,
+    PasswordResetToken,
     Queue,
     QueueEntry,
     QueueEvent,
@@ -13,12 +16,15 @@ from .entities import (
 )
 
 __all__ = [
+    "AuthRateLimit",
+    "AuthSession",
     "Branch",
     "Counter",
     "Feedback",
     "Notification",
     "NotificationPreference",
     "Organization",
+    "PasswordResetToken",
     "Queue",
     "QueueEntry",
     "QueueEvent",

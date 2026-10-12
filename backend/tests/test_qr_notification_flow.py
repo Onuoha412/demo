@@ -2,8 +2,7 @@ import asyncio
 import uuid
 from collections.abc import Generator
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock
-
+from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
@@ -15,6 +14,7 @@ from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
 from app.models import (
+    Counter,
     Branch,
     Notification,
     NotificationPreference,
@@ -24,7 +24,7 @@ from app.models import (
     Service,
     User,
 )
-from app.models.entities import QueueEntryStatus, UserRole
+from app.models.entities import CounterStatus, QueueEntryStatus, UserRole
 from app.services.notifications import NotificationService
 from app.services.queue import QueueService
 from app.services.realtime import RealtimeManager
@@ -79,7 +79,13 @@ def test_qr_join_creates_ticket_and_joined_and_called_notifications(
         role=UserRole.STAFF,
         branch=branch,
     )
-    session.add_all([customer, staff])
+    admin = User(
+        full_name="Admin",
+        email=f"{uuid.uuid4()}@example.test",
+        password_hash="test-hash",
+        role=UserRole.ADMIN,
+    )
+    session.add_all([customer, staff, admin])
     session.commit()
 
     def override_db() -> Generator[Session, None, None]:
@@ -95,13 +101,25 @@ def test_qr_join_creates_ticket_and_joined_and_called_notifications(
     assert "password" not in catalog_response.text.lower()
     assert "customer" not in catalog_response.text.lower()
 
-    joined = client.post(
-        f"/api/v1/customers/services/{service.id}/join",
-        params={"branch_id": str(branch.id)},
-    )
+    with patch("app.services.queue.realtime.publish_nowait") as publish:
+        joined = client.post(
+            f"/api/v1/customers/services/{service.id}/join",
+            params={"branch_id": str(branch.id)},
+            json={"request_note": "  Renewing my passport  "},
+        )
     assert joined.status_code == 201, joined.text
     ticket = joined.json()
     assert ticket["queue_number"] == 1
+    assert ticket["queue_prefix"] == "A"
+    assert ticket["request_note"] == "Renewing my passport"
+    assert ticket["verified_at"] is None
+    public_queue = client.get(f"/api/v1/queues/{ticket['queue_id']}")
+    assert "Renewing my passport" not in public_queue.text
+    assert all(
+        "request_note" not in call.args[2]
+        for call in publish.call_args_list
+        if len(call.args) > 2 and isinstance(call.args[2], dict)
+    )
 
     notices = client.get("/api/v1/notifications").json()["items"]
     assert [item["type"] for item in notices] == ["queue_joined"]
@@ -119,6 +137,21 @@ def test_qr_join_creates_ticket_and_joined_and_called_notifications(
         f"/api/v1/notifications/{called_notice['id']}/read"
     ).status_code == 204
     assert client.get("/api/v1/notifications/unread-count").json()["count"] == 1
+    unauthorized_verification = client.post(
+        f"/api/v1/admin/queue-entries/{ticket['id']}/verify"
+    )
+    assert unauthorized_verification.status_code == 403
+    app.dependency_overrides[get_current_user] = lambda: admin
+    verified = client.post(f"/api/v1/admin/queue-entries/{ticket['id']}/verify")
+    assert verified.status_code == 200, verified.text
+    verified_ticket = verified.json()
+    assert verified_ticket["request_note"] == "Renewing my passport"
+    assert verified_ticket["verified_at"] is not None
+    assert verified_ticket["verified_by_user_id"] == str(admin.id)
+    repeated_verification = client.post(
+        f"/api/v1/admin/queue-entries/{ticket['id']}/verify"
+    )
+    assert repeated_verification.json()["verified_at"] == verified_ticket["verified_at"]
 
 
 def test_approaching_and_queue_status_events_are_idempotent(session: Session) -> None:
@@ -180,11 +213,48 @@ def test_notification_preferences_can_disable_event_types(session: Session) -> N
     ) is None
 
 
-def test_realtime_queue_events_encode_uuid_and_datetime_payloads(
+def test_completing_called_customer_auto_calls_next_on_same_counter(
+    session: Session,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr("app.services.realtime.cache.publish", AsyncMock())
-    monkeypatch.setattr("app.services.realtime.cache.set_json", AsyncMock())
+    branch, _, queue = create_queue(session)
+    counter = Counter(
+        name="Counter 2",
+        number=2,
+        branch=branch,
+        status=CounterStatus.AVAILABLE,
+    )
+    customers = [make_customer(f"Customer {index}") for index in range(2)]
+    session.add_all([counter, *customers])
+    session.commit()
+
+    queue_service = QueueService(session)
+    first = queue_service.join(queue.id, customers[0].id)
+    second = queue_service.join(queue.id, customers[1].id)
+    called = queue_service.call(first["id"], counter.id)
+
+    events: list[tuple[str, object]] = []
+    monkeypatch.setattr(
+        "app.services.queue.realtime.publish_nowait",
+        lambda queue_id, name, data: events.append((name, data)),
+    )
+    completed = queue_service.complete(called["id"])
+
+    assert completed["status"] == QueueEntryStatus.COMPLETED
+    updated = queue_service.position(queue.id, second["id"])
+    assert updated["status"] == QueueEntryStatus.CALLED
+    assert updated["counter_id"] == counter.id
+    assert updated["counter"]["name"] == "Counter 2"
+    assert session.get(Counter, counter.id).status == CounterStatus.AVAILABLE
+    assert [name for name, _ in events] == [
+        "CUSTOMER_COMPLETED",
+        "QUEUE_UPDATED",
+        "CUSTOMER_CALLED",
+        "QUEUE_UPDATED",
+    ]
+
+
+def test_realtime_queue_events_encode_uuid_and_datetime_payloads() -> None:
     manager = RealtimeManager()
     queue_id = uuid.uuid4()
     entry_id = uuid.uuid4()

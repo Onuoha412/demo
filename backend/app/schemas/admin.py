@@ -1,9 +1,10 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from ..models.entities import CounterStatus, QueueStatus, UserRole
+from .queue import QueueEntryResponse
 
 
 class PageResponse(BaseModel):
@@ -83,22 +84,77 @@ class QueueStatusUpdate(BaseModel):
     status: QueueStatus
 
 
+class AdminQueueCustomerResponse(BaseModel):
+    id: UUID
+    full_name: str
+    email: str
+
+
+class AdminQueueEntryResponse(QueueEntryResponse):
+    customer: AdminQueueCustomerResponse
+    request_note: str | None = None
+    verified_at: datetime | None = None
+    verified_by_user_id: UUID | None = None
+
+
+class AdminQueueAuditResponse(BaseModel):
+    id: UUID
+    name: str
+    prefix: str
+    status: QueueStatus
+    current_number: int
+    average_service_minutes: int
+    active_counters: int
+    total_entries: int
+    page: int
+    page_size: int
+    service_id: UUID
+    service_name: str
+    branch_id: UUID
+    entries: list[AdminQueueEntryResponse]
+
+
 class UserCreate(BaseModel):
     full_name: str = Field(min_length=2, max_length=160)
-    email: str = Field(min_length=5, max_length=320)
+    email: str = Field(
+        min_length=5,
+        max_length=320,
+        pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$",
+    )
     password: str = Field(min_length=8, max_length=128)
     role: UserRole = UserRole.CUSTOMER
     organization_id: UUID | None = None
     branch_id: UUID | None = None
 
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: str) -> str:
+        return value.strip().lower()
+
+    @model_validator(mode="after")
+    def staff_requires_branch(self) -> "UserCreate":
+        if self.role is UserRole.STAFF and self.branch_id is None:
+            raise ValueError("Staff users must be assigned to a branch")
+        return self
+
 
 class UserUpdate(BaseModel):
     full_name: str | None = Field(default=None, min_length=2, max_length=160)
-    email: str | None = Field(default=None, min_length=5, max_length=320)
+    email: str | None = Field(
+        default=None,
+        min_length=5,
+        max_length=320,
+        pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$",
+    )
     role: UserRole | None = None
     organization_id: UUID | None = None
     branch_id: UUID | None = None
     password: str | None = Field(default=None, min_length=8, max_length=128)
+
+    @field_validator("email")
+    @classmethod
+    def normalize_email(cls, value: str | None) -> str | None:
+        return value.strip().lower() if value is not None else None
 
 
 class AdminUserResponse(BaseModel):

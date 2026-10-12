@@ -2,17 +2,74 @@ name: Backend
 
 on:
   push:
-    paths: ["backend/**"]
+    paths:
+      - "backend/**"
+      - "render.yaml"
+      - ".github/workflows/backend.yml"
   pull_request:
-    paths: ["backend/**"]
+    paths:
+      - "backend/**"
+      - "render.yaml"
+      - ".github/workflows/backend.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
-  compile:
+  backend-validation:
+    name: Backend validation
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      ENVIRONMENT: test
+      DATABASE_URL: sqlite:///./queueless-ci.db
+      JWT_SECRET: queueless-ci-only-secret-value-at-least-32-bytes
+      SECRET_KEY: queueless-ci-other-secret-value-at-least-32-bytes
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: python -m pip install -r backend/requirements.txt
-      - run: python -m compileall -q backend
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: python -m pip install -r requirements.txt
+      - run: python -m pytest -q
+      - run: python -m compileall -q app
+      - run: python -c "from app.main import app; assert any(route.path == '/health' for route in app.routes)"
+
+  backend-runtime:
+    name: Backend startup and health
+    needs: backend-validation
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      ENVIRONMENT: test
+      DATABASE_URL: sqlite:///./queueless-ci.db
+      JWT_SECRET: queueless-ci-only-secret-value-at-least-32-bytes
+      SECRET_KEY: queueless-ci-other-secret-value-at-least-32-bytes
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: python -m pip install -r requirements.txt
+      - name: Start application and verify health endpoint
+        run: |
+          python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true; wait "$server_pid" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 20); do
+            if curl --fail --silent http://127.0.0.1:8000/health; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Backend did not become healthy" >&2
+          exit 1

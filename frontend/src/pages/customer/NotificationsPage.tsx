@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 
@@ -14,21 +15,24 @@ import {
   updateNotificationPreferences,
 } from "../../services/notifications";
 import type { NotificationPreferences } from "../../services/notifications";
+import { captureProductEvent } from "../../observability";
 
 const preferenceOptions: { key: keyof Omit<NotificationPreferences, "enabled">; label: string }[] = [
   { key: "joined", label: "When I join a queue" },
   { key: "called", label: "When I am called" },
   { key: "approaching", label: "When my turn is approaching" },
   { key: "completed", label: "When service is completed" },
-  { key: "queue_updates", label: "When a queue is paused or resumed" },
+  { key: "queue_updates", label: "When a queue is paused, resumed, or closed" },
 ];
 
 export function NotificationsPage() {
   const client = useQueryClient();
+  useEffect(() => {
+    captureProductEvent("notification_opened");
+  }, []);
   const query = useQuery({
     queryKey: ["notifications"],
     queryFn: () => getNotifications(),
-    refetchInterval: 30000,
   });
   const preferences = useQuery({
     queryKey: ["notification-preferences"],

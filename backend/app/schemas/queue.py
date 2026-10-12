@@ -1,13 +1,23 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ..models.entities import QueueEntryStatus, QueueStatus
 
 
 class JoinQueueRequest(BaseModel):
     customer_id: UUID
+
+
+class JoinServiceRequest(BaseModel):
+    request_note: str | None = Field(default=None, max_length=500)
+
+    @field_validator("request_note")
+    @classmethod
+    def normalize_request_note(cls, value: str | None) -> str | None:
+        normalized = value.strip() if value is not None else None
+        return normalized or None
 
 
 class CounterActionRequest(BaseModel):
@@ -24,6 +34,7 @@ class CounterResponse(BaseModel):
 class QueueEntryResponse(BaseModel):
     id: UUID
     queue_id: UUID | None = None
+    queue_prefix: str
     queue_number: int
     status: QueueEntryStatus
     people_ahead: int
@@ -53,4 +64,6 @@ class QueueResponse(BaseModel):
 
 
 class PositionResponse(QueueEntryResponse):
-    pass
+    request_note: str | None = None
+    verified_at: datetime | None = None
+    verified_by_user_id: UUID | None = None

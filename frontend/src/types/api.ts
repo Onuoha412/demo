@@ -26,9 +26,8 @@ export type StaffDashboard = {
 };
 
 export type AuthResponse = {
-  access_token: string;
-  token_type: "bearer";
   user: User;
+  session_token: string;
 };
 
 export type Organization = {
@@ -67,6 +66,7 @@ export type QueueEntryStatus =
 export type QueuePosition = {
   id: string;
   queue_id?: string;
+  queue_prefix: string;
   queue_number: number;
   status: QueueEntryStatus;
   people_ahead: number;
@@ -77,6 +77,9 @@ export type QueuePosition = {
   called_at: string | null;
   service_started_at: string | null;
   completed_at: string | null;
+  request_note?: string | null;
+  verified_at?: string | null;
+  verified_by_user_id?: string | null;
 };
 
 export type WaitTimePrediction = {

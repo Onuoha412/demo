@@ -1,6 +1,7 @@
 import { apiRequest } from "./api";
 import { handleAuthError } from "./auth";
 import { useAuthStore } from "../store/authStore";
+import { captureProductEvent } from "../observability";
 import type {
   Branch,
   Organization,
@@ -42,14 +43,37 @@ export async function getQueue(queueId: string) {
   }>(`/api/v1/queues/${queueId}?page=1&page_size=20`);
 }
 
-export async function joinService(serviceId: string, branchId?: string): Promise<QueuePosition> {
+export async function joinService(
+  serviceId: string,
+  branchId?: string,
+  requestNote?: string,
+): Promise<QueuePosition> {
   try {
     const query = branchId ? `?branch_id=${encodeURIComponent(branchId)}` : "";
-    return await apiRequest<QueuePosition>(
+    const result = await apiRequest<QueuePosition>(
       `/api/v1/customers/services/${encodeURIComponent(serviceId)}/join${query}`,
+      {
+        method: "POST",
+        body: JSON.stringify({ request_note: requestNote?.trim() || null }),
+      },
+      requireToken(),
+    );
+    captureProductEvent("queue_joined");
+    return result;
+  } catch (error) {
+    handleAuthError(error);
+  }
+}
+
+export async function cancelQueueEntry(entryId: string): Promise<QueuePosition> {
+  try {
+    const result = await apiRequest<QueuePosition>(
+      `/api/v1/queue-entries/${encodeURIComponent(entryId)}/cancel`,
       { method: "POST" },
       requireToken(),
     );
+    captureProductEvent("queue_cancelled");
+    return result;
   } catch (error) {
     handleAuthError(error);
   }

@@ -19,13 +19,11 @@ export function QueuePage() {
   const query = useQuery({
     queryKey: ["queue-entry", entryId],
     queryFn: () => getQueueEntry(entryId),
-    refetchInterval: 15000,
   });
   const prediction = useQuery({
     queryKey: ["wait-time-prediction", entryId],
     queryFn: () => getWaitTimePrediction(entryId),
     enabled: !!entryId && !!query.data && !["completed", "skipped", "cancelled"].includes(query.data.status),
-    refetchInterval: 30000,
   });
   const socket = useQueueWebSocket(query.data?.queue_id, token ?? undefined);
   const requestBrowserNotifications = useBrowserNotifications(socket.event, entryId);
@@ -41,6 +39,23 @@ export function QueuePage() {
         {query.data && (
           <>
             <QueueTicket position={query.data} />
+            {query.data.status === "called" && (
+              <section
+                className="rounded-2xl border border-amber-300 bg-amber-50 p-5 text-amber-950"
+                role="status"
+                aria-live="assertive"
+              >
+                <h2 className="text-xl font-black">You have been called.</h2>
+                <p className="mt-1">
+                  Proceed to {query.data.counter?.name ?? "the counter"}.
+                </p>
+              </section>
+            )}
+            {query.data.status === "completed" && (
+              <p className="rounded-2xl border border-emerald-300 bg-emerald-50 p-5 text-xl font-black text-emerald-950">
+                Service completed ✓
+              </p>
+            )}
             <button className="text-sm font-semibold text-emerald-800" onClick={() => void requestBrowserNotifications()}>Enable browser notifications</button>
             <QueuePosition position={query.data} />
             <WaitTimeCard

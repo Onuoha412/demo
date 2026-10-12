@@ -1,12 +1,25 @@
 import uuid
-
+import secrets
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app.api.auth_dependencies import get_db
+from app.api.routes import auth as auth_routes
+from app.api.auth_dependencies import get_current_user, get_db
+from app.auth.sessions import hash_opaque_token
 from app.core.security import create_access_token, hash_password
 from app.main import app
-from app.models import Branch, Counter, Organization, Queue, QueueEntry, Service, User
+from app.models import (
+    Branch,
+    Counter,
+    Organization,
+    PasswordResetToken,
+    Queue,
+    QueueEntry,
+    Service,
+    User,
+)
 from app.models.entities import CounterStatus, QueueEntryStatus, UserRole
 
 
@@ -39,6 +52,35 @@ def make_user(email: str, role: UserRole, branch: Branch | None = None) -> User:
         role=role,
         branch=branch,
     )
+
+
+def test_admin_api_authorization_is_enforced_by_backend() -> None:
+    class EmptyAdminDb:
+        @staticmethod
+        def scalar(*args: object) -> int:
+            assert args
+            return 0
+
+        @staticmethod
+        def scalars(*args: object) -> list[object]:
+            assert args
+            return []
+
+    current_role = {"value": UserRole.CUSTOMER}
+
+    def current_user():
+        return SimpleNamespace(role=current_role["value"])
+
+    app.dependency_overrides[get_current_user] = current_user
+    app.dependency_overrides[get_db] = EmptyAdminDb
+    client = TestClient(app)
+
+    for role in (UserRole.CUSTOMER, UserRole.STAFF):
+        current_role["value"] = role
+        assert client.get("/api/v1/admin/organizations").status_code == 403
+
+    current_role["value"] = UserRole.ADMIN
+    assert client.get("/api/v1/admin/organizations").status_code == 200
 
 
 def test_register_login_and_queue_authorization(db_session: Session) -> None:
@@ -89,6 +131,33 @@ def test_register_login_and_queue_authorization(db_session: Session) -> None:
     assert staff_client.post(f"/api/v1/staff/queues/{queue.id}/pause").status_code == 200
     assert customer_client.post(f"/api/v1/staff/queues/{queue.id}/resume").status_code == 403
     assert staff_client.post(f"/api/v1/staff/queues/{queue.id}/resume").status_code == 200
+
+
+def test_public_catalog_returns_database_services_and_queue_ids(db_session: Session) -> None:
+    branch, _, queue = make_queue(db_session)
+
+    def override_db():
+        yield db_session
+
+    client = TestClient(app)
+    app.dependency_overrides[get_db] = override_db
+
+    response = client.get(
+        "/api/v1/catalog/services", params={"branch_id": str(branch.id)}
+    )
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "id": str(queue.service.id),
+            "branch_id": str(branch.id),
+            "name": "Auth Service",
+            "code": queue.service.code,
+            "description": queue.service.description,
+            "average_service_minutes": queue.service.average_service_minutes,
+            "queue_id": str(queue.id),
+        }
+    ]
 
 
 def test_qr_service_join_validates_branch_and_creates_ticket_notification(db_session: Session) -> None:
@@ -146,7 +215,7 @@ def test_notification_preferences_persist_and_unknown_notification_is_not_found(
     assert client.post(f"/api/v1/notifications/{uuid.uuid4()}/read").status_code == 404
 
 
-def test_login_returns_token_and_register_hash_is_not_exposed(db_session: Session) -> None:
+def test_login_sets_http_only_session_cookie_and_register_hash_is_not_exposed(db_session: Session) -> None:
     def override_db():
         yield db_session
 
@@ -158,12 +227,127 @@ def test_login_returns_token_and_register_hash_is_not_exposed(db_session: Sessio
     )
     assert response.status_code == 201
     assert "password_hash" not in response.json()["user"]
+    assert response.json()["session_token"]
     login = client.post(
         "/api/v1/auth/login",
         json={"email": response.json()["user"]["email"], "password": "test-password-123"},
     )
     assert login.status_code == 200
-    assert login.json()["access_token"]
+    assert "access_token" not in login.json()
+    session_token = login.json()["session_token"]
+    assert session_token
+    assert login.json()["user"]["email"] == response.json()["user"]["email"]
+    assert client.cookies.get("queueless_session")
+    assert "httponly" in login.headers["set-cookie"].lower()
+    assert client.get("/api/v1/auth/me").json()["email"] == response.json()["user"]["email"]
+    bearer_client = TestClient(app)
+    bearer_client.headers["Authorization"] = f"Bearer {session_token}"
+    assert bearer_client.get("/api/v1/auth/me").json()["email"] == response.json()["user"]["email"]
+    assert bearer_client.post("/api/v1/auth/logout").status_code == 204
+    assert bearer_client.get("/api/v1/auth/me").status_code == 401
+    assert client.get("/api/v1/auth/me").status_code == 401
+
+
+def test_google_credential_creates_session_and_consumes_nonce(
+    db_session: Session, monkeypatch
+) -> None:
+    def override_db():
+        yield db_session
+
+    async def verify_google_credential(credential: str, nonce: str):
+        assert credential == "google-credential"
+        assert nonce
+        return {
+            "email": f"{uuid.uuid4()}@example.test",
+            "sub": "google-user-id",
+            "name": "Google User",
+        }
+
+    app.dependency_overrides[get_db] = override_db
+    monkeypatch.setattr(auth_routes.settings, "google_client_id", "test-google-client-id")
+    monkeypatch.setattr(auth_routes, "verify_google_credential", verify_google_credential)
+    client = TestClient(app)
+    challenge = client.post("/api/v1/auth/google/challenge")
+    assert challenge.status_code == 200
+    assert challenge.json()["client_id"] == "test-google-client-id"
+    nonce = challenge.json()["nonce"]
+    response = client.post(
+        "/api/v1/auth/google/credential",
+        json={"credential": "google-credential", "nonce": nonce},
+    )
+    assert response.status_code == 200
+    assert response.json()["user"]["email"].endswith("@example.test")
+    assert response.json()["session_token"]
+    replay = client.post(
+        "/api/v1/auth/google/credential",
+        json={"credential": "google-credential", "nonce": nonce},
+    )
+    assert replay.status_code == 401
+    session_token = response.json()["session_token"]
+    bearer_client = TestClient(app)
+    bearer_client.headers["Authorization"] = f"Bearer {session_token}"
+    assert bearer_client.get("/api/v1/auth/me").json()["email"].endswith("@example.test")
+
+
+def test_registration_normalizes_email_and_rejects_case_insensitive_duplicate(
+    db_session: Session,
+) -> None:
+    def override_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_db
+    client = TestClient(app)
+    email = f"{uuid.uuid4()}@example.test"
+    first = client.post(
+        "/api/v1/auth/register",
+        json={"full_name": "First Person", "email": email.upper(), "password": "test-password-123"},
+    )
+    assert first.status_code == 201
+    assert first.json()["user"]["email"] == email
+    duplicate = client.post(
+        "/api/v1/auth/register",
+        json={"full_name": "Another Person", "email": email, "password": "test-password-123"},
+    )
+    assert duplicate.status_code == 409
+
+
+def test_password_reset_is_one_time_and_revokes_existing_sessions(db_session: Session) -> None:
+    user = make_user("password-reset", UserRole.CUSTOMER)
+    db_session.add(user)
+    db_session.commit()
+    raw_token = secrets.token_urlsafe(48)
+    reset_token = PasswordResetToken(
+        user_id=user.id,
+        token_hash=hash_opaque_token(raw_token),
+        expires_at=datetime.now(timezone.utc) + timedelta(minutes=30),
+    )
+    db_session.add(reset_token)
+    db_session.commit()
+
+    def override_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_db
+    client = TestClient(app)
+    login = client.post(
+        "/api/v1/auth/login",
+        json={"email": user.email, "password": "test-password-123"},
+    )
+    assert login.status_code == 200
+    reset = client.post(
+        "/api/v1/auth/reset-password",
+        json={"token": raw_token, "password": "new-password-456"},
+    )
+    assert reset.status_code == 200
+    assert client.get("/api/v1/auth/me").status_code == 401
+    assert client.post(
+        "/api/v1/auth/reset-password",
+        json={"token": raw_token, "password": "another-password-789"},
+    ).status_code == 400
+    assert client.post(
+        "/api/v1/auth/login",
+        json={"email": user.email, "password": "new-password-456"},
+    ).status_code == 200
 
 
 def test_wait_prediction_for_active_entry_with_no_history(db_session: Session) -> None:

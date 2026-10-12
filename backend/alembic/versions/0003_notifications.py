@@ -9,6 +9,8 @@ depends_on = None
 
 
 def upgrade() -> None:
+    if op.get_bind().dialect.name == "sqlite":
+        return
     op.execute("ALTER TABLE notifications ADD COLUMN IF NOT EXISTS event_key VARCHAR(160)")
     op.execute(
         "UPDATE notifications SET event_key = id::text WHERE event_key IS NULL"
@@ -43,6 +45,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    if op.get_bind().dialect.name == "sqlite":
+        return
     op.execute(
         "ALTER TABLE notifications DROP CONSTRAINT IF EXISTS notifications_type_check"
     )

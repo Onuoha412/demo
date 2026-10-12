@@ -5,27 +5,42 @@ import type { User } from "../types/api";
 type AuthState = {
   token: string | null;
   user: User | null;
-  setAuth: (token: string, user: User) => void;
+  ready: boolean;
+  setAuth: (user: User, token: string) => void;
+  setReady: () => void;
   logout: () => void;
 };
 
-const TOKEN_KEY = "queueless.token";
-const USER_KEY = "queueless.user";
+const TOKEN_KEY = "queueless.session";
 
-const initialToken = localStorage.getItem(TOKEN_KEY);
-const initialUser = localStorage.getItem(USER_KEY);
+function clearLegacyCredentials(): void {
+  if (typeof localStorage === "undefined") return;
+  localStorage.removeItem("queueless.token");
+  localStorage.removeItem("queueless.user");
+}
+
+function getStoredToken(): string | null {
+  if (typeof sessionStorage === "undefined") return null;
+  return sessionStorage.getItem(TOKEN_KEY);
+}
+
+clearLegacyCredentials();
 
 export const useAuthStore = create<AuthState>((set) => ({
-  token: initialToken,
-  user: initialUser ? (JSON.parse(initialUser) as User) : null,
-  setAuth: (token, user) => {
-    localStorage.setItem(TOKEN_KEY, token);
-    localStorage.setItem(USER_KEY, JSON.stringify(user));
-    set({ token, user });
+  token: getStoredToken(),
+  user: null,
+  ready: false,
+  setAuth: (user, token) => {
+    if (typeof sessionStorage !== "undefined") {
+      sessionStorage.setItem(TOKEN_KEY, token);
+    }
+    set({ token, user, ready: true });
   },
+  setReady: () => set({ ready: true }),
   logout: () => {
-    localStorage.removeItem(TOKEN_KEY);
-    localStorage.removeItem(USER_KEY);
-    set({ token: null, user: null });
+    if (typeof sessionStorage !== "undefined") {
+      sessionStorage.removeItem(TOKEN_KEY);
+    }
+    set({ token: null, user: null, ready: true });
   },
 }));

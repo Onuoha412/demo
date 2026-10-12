@@ -9,7 +9,6 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..models import Notification, NotificationPreference, QueueEntry
 from ..models.entities import NotificationType, QueueEntryStatus
-from .realtime import realtime
 
 
 class NotificationService:
@@ -96,7 +95,9 @@ class NotificationService:
         elif kind == "called":
             self.create(
                 entry.customer_id, f"entry:{entry.id}:called", NotificationType.CUSTOMER_CALLED,
-                "Your turn is now", f"Ticket {number} has been called.",
+                "Your turn is now",
+                f"Ticket {number} has been called. Proceed to "
+                f"{entry.counter.name if entry.counter is not None else 'the counter'}.",
                 entry.id, "called",
             )
         elif kind == "completed":
@@ -121,7 +122,7 @@ class NotificationService:
             )
         ) or 0
 
-    def approaching(self, entry: QueueEntry) -> None:
+    def approaching(self, entry: QueueEntry) -> dict | None:
         people_ahead = self._people_ahead(entry)
         if 0 < people_ahead <= settings.notification_approaching_threshold:
             event_key = f"entry:{entry.id}:approaching"
@@ -136,25 +137,33 @@ class NotificationService:
                 "approaching",
             )
             if notification is not None and created:
-                realtime.publish_nowait(
-                    entry.queue_id,
-                    "QUEUE_APPROACHING",
-                    {
+                return {
+                    "queue_id": entry.queue_id,
+                    "data": {
                         "queue_entry_id": str(entry.id),
                         "queue_number": entry.queue_number,
                         "people_ahead": people_ahead,
                     },
-                )
+                }
+        return None
 
-    def approaching_queue(self, queue_id: UUID) -> None:
+    def approaching_queue(self, queue_id: UUID) -> list[dict]:
         entries = self.session.scalars(
-            select(QueueEntry).where(
+            select(QueueEntry)
+            .where(
                 QueueEntry.queue_id == queue_id,
                 QueueEntry.status == QueueEntryStatus.WAITING,
             )
+            .order_by(QueueEntry.queue_number)
+            .limit(settings.notification_approaching_threshold + 1)
         )
-        for entry in entries:
-            self.approaching(entry)
+        events = []
+        for position, entry in enumerate(entries):
+            if position > 0:
+                event = self.approaching(entry)
+                if event is not None:
+                    events.append(event)
+        return events
 
     def queue_status(self, queue_id: UUID, status: str, event_id: UUID | None = None) -> None:
         entries = self.session.scalars(
@@ -164,9 +173,16 @@ class NotificationService:
             )
         )
         for entry in entries:
+            notification_type = {
+                "paused": NotificationType.QUEUE_PAUSED,
+                "resumed": NotificationType.QUEUE_RESUMED,
+                "closed": NotificationType.QUEUE_CLOSED,
+            }.get(status)
+            if notification_type is None:
+                raise ValueError(f"Unsupported queue status notification: {status}")
             self.create(
                 entry.customer_id, f"queue:{queue_id}:{status}:{event_id or entry.id}:{entry.id}",
-                NotificationType.QUEUE_PAUSED if status == "paused" else NotificationType.QUEUE_RESUMED,
+                notification_type,
                 f"Queue {status}", f"Your queue is now {status}.", entry.id,
             )
 

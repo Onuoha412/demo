@@ -1,20 +1,34 @@
+import hashlib
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
+import bcrypt
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 
 from ..config import settings
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+_BCRYPT_SHA256_PREFIX = "bcrypt-sha256$"
 
 
 def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+    encoded = password.encode("utf-8")
+    prefix = ""
+    if len(encoded) > 72:
+        encoded = hashlib.sha256(encoded).hexdigest().encode("ascii")
+        prefix = _BCRYPT_SHA256_PREFIX
+    password_hash = bcrypt.hashpw(encoded, bcrypt.gensalt())
+    return prefix + password_hash.decode("ascii")
 
 
 def verify_password(password: str, password_hash: str) -> bool:
-    return pwd_context.verify(password, password_hash)
+    encoded = password.encode("utf-8")
+    if password_hash.startswith(_BCRYPT_SHA256_PREFIX):
+        encoded = hashlib.sha256(encoded).hexdigest().encode("ascii")
+        password_hash = password_hash.removeprefix(_BCRYPT_SHA256_PREFIX)
+    try:
+        return bcrypt.checkpw(encoded, password_hash.encode("ascii"))
+    except ValueError:
+        return False
 
 
 def create_access_token(user_id: UUID) -> str:

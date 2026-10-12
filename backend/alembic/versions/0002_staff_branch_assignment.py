@@ -9,6 +9,8 @@ depends_on = None
 
 
 def upgrade() -> None:
+    if op.get_bind().dialect.name == "sqlite":
+        return
     op.execute(
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS branch_id UUID "
         "REFERENCES branches(id) ON DELETE SET NULL"
@@ -17,5 +19,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    if op.get_bind().dialect.name == "sqlite":
+        return
     op.drop_index("ix_users_branch_id", table_name="users")
     op.drop_column("users", "branch_id")

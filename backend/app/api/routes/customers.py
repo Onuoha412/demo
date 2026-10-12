@@ -8,7 +8,7 @@ from ...api.auth_dependencies import get_current_user
 from ...db.session import get_db
 from ...models import Queue, QueueEntry, Service, User
 from ...schemas.customer import QueueHistoryItem, QueueHistoryResponse
-from ...schemas.queue import PositionResponse
+from ...schemas.queue import JoinServiceRequest, PositionResponse
 from ...services.queue import QueueService
 
 router = APIRouter(prefix="/customers", tags=["customers"])
@@ -18,6 +18,7 @@ router = APIRouter(prefix="/customers", tags=["customers"])
 def join_by_service(
     service_id: UUID,
     branch_id: UUID | None = Query(None),
+    payload: JoinServiceRequest | None = None,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
@@ -29,7 +30,9 @@ def join_by_service(
     queue = db.scalar(select(Queue).where(Queue.service_id == service_id))
     if queue is None:
         raise HTTPException(status_code=404, detail="No queue available for service")
-    return QueueService(db).join(queue.id, user.id)
+    return QueueService(db).join(
+        queue.id, user.id, request_note=payload.request_note if payload else None
+    )
 
 
 @router.get("/queue-entries/{entry_id}", response_model=PositionResponse)

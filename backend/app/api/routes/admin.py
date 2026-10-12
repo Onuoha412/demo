@@ -1,7 +1,8 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy import func, select, or_
 from sqlalchemy.orm import Session, joinedload
 
@@ -9,12 +10,14 @@ from ...api.auth_dependencies import require_admin
 from ...core.security import hash_password
 from ...db.session import get_db
 from ...models import Branch, Counter, Organization, Queue, QueueEntry, Service, User
-from ...models.entities import QueueEntryStatus
+from ...models.entities import QueueEntryStatus, UserRole
 from ...schemas.admin import (
     AdminUserPageResponse, AdminUserResponse, AnalyticsResponse, BranchCreate, BranchUpdate, CounterCreate, CounterUpdate,
-    OrganizationCreate, OrganizationUpdate, PageResponse, QueueCreate, QueueStatusUpdate,
+    AdminQueueAuditResponse, OrganizationCreate, OrganizationUpdate, PageResponse, QueueCreate, QueueStatusUpdate,
     QueueUpdate, ServiceCreate, ServiceUpdate, UserCreate, UserUpdate,
 )
+from ...schemas.queue import PositionResponse
+from ...services.queue import QueueService
 
 router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_admin)])
 
@@ -22,7 +25,8 @@ router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(requir
 def _page(model, db: Session, page: int, page_size: int, *filters):
     query = select(model).where(*filters).order_by(model.created_at.desc())
     total = db.scalar(select(func.count()).select_from(model).where(*filters)) or 0
-    return PageResponse(items=list(db.scalars(query.offset((page - 1) * page_size).limit(page_size))),
+    items = list(db.scalars(query.offset((page - 1) * page_size).limit(page_size)))
+    return PageResponse(items=jsonable_encoder(items),
                         total=total, page=page, page_size=page_size)
 
 
@@ -184,6 +188,60 @@ def create_queue(payload: QueueCreate, db: Session = Depends(get_db)):
 def get_queue(item_id: UUID, db: Session = Depends(get_db)): return _get(db, Queue, item_id)
 
 
+@router.get("/queues/{queue_id}/entries", response_model=AdminQueueAuditResponse)
+def queue_entries(
+    queue_id: UUID,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    queue = db.scalar(
+        select(Queue)
+        .options(joinedload(Queue.service))
+        .where(Queue.id == queue_id)
+    )
+    if queue is None:
+        raise HTTPException(status_code=404, detail="Queue not found")
+
+    queue_data = QueueService(db).get_queue(queue_id, page, page_size)
+    entry_ids = [entry["id"] for entry in queue_data["entries"]]
+    customers_by_entry_id = {}
+    if entry_ids:
+        entries = db.scalars(
+            select(QueueEntry)
+            .options(joinedload(QueueEntry.customer))
+            .where(QueueEntry.id.in_(entry_ids))
+        )
+        customers_by_entry_id = {
+            entry.id: {
+                "id": entry.customer.id,
+                "full_name": entry.customer.full_name,
+                "email": entry.customer.email,
+            }
+            for entry in entries
+        }
+
+    return {
+        **queue_data,
+        "service_id": queue.service_id,
+        "service_name": queue.service.name,
+        "branch_id": queue.service.branch_id,
+        "entries": [
+            {**entry, "customer": customers_by_entry_id[entry["id"]]}
+            for entry in queue_data["entries"]
+        ],
+    }
+
+
+@router.post("/queue-entries/{entry_id}/verify", response_model=PositionResponse)
+def verify_queue_entry(
+    entry_id: UUID,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    return QueueService(db).verify_request(entry_id, admin.id)
+
+
 @router.put("/queues/{item_id}")
 @router.patch("/queues/{item_id}")
 def update_queue(item_id: UUID, payload: QueueUpdate, db: Session = Depends(get_db)):
@@ -195,8 +253,7 @@ def update_queue(item_id: UUID, payload: QueueUpdate, db: Session = Depends(get_
 @router.put("/queues/{item_id}/status")
 @router.patch("/queues/{item_id}/status")
 def update_queue_status(item_id: UUID, payload: QueueStatusUpdate, db: Session = Depends(get_db)):
-    item = _get(db, Queue, item_id); item.status = payload.status
-    return _save(db, item)
+    return QueueService(db).set_status(item_id, payload.status)
 
 
 @router.delete("/queues/{item_id}")
@@ -220,6 +277,17 @@ def list_users(role: str | None = None, search: str | None = None, page: int = Q
 def create_user(payload: UserCreate, db: Session = Depends(get_db)):
     values = payload.model_dump(exclude={"password"})
     values["password_hash"] = hash_password(payload.password)
+    if payload.branch_id is not None:
+        branch = _get(db, Branch, payload.branch_id)
+        if (
+            payload.organization_id is not None
+            and payload.organization_id != branch.organization_id
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="User organization must match the assigned branch",
+            )
+        values["organization_id"] = branch.organization_id
     return _save(db, User(**values))
 
 
@@ -232,6 +300,23 @@ def get_user(item_id: UUID, db: Session = Depends(get_db)): return _get(db, User
 def update_user(item_id: UUID, payload: UserUpdate, db: Session = Depends(get_db)):
     item = _get(db, User, item_id)
     values = payload.model_dump(exclude_unset=True)
+    role = values.get("role", item.role)
+    branch_id = values.get("branch_id", item.branch_id)
+    if role is UserRole.STAFF and branch_id is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Staff users must be assigned to a branch",
+        )
+    if branch_id is not None:
+        branch = _get(db, Branch, branch_id)
+        organization_id = values.get("organization_id", item.organization_id)
+        if organization_id is not None and organization_id != branch.organization_id:
+            if "organization_id" in values:
+                raise HTTPException(
+                    status_code=422,
+                    detail="User organization must match the assigned branch",
+                )
+        values["organization_id"] = branch.organization_id
     if "password" in values:
         values["password_hash"] = hash_password(values.pop("password"))
     for key, value in values.items(): setattr(item, key, value)

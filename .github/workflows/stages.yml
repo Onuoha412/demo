@@ -1,0 +1,311 @@
+name: QueueLess Stages
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  stage-2-queue-engine:
+    name: Stage 2 - Queue Engine
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      ENVIRONMENT: test
+      DATABASE_URL: sqlite:///./queueless-ci.db
+      JWT_SECRET: queueless-ci-only-secret-value-at-least-32-bytes
+      SECRET_KEY: queueless-ci-other-secret-value-at-least-32-bytes
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: python -m pip install -r requirements.txt
+      - run: python -m pytest -q tests/test_queue_engine.py
+
+  stage-4-customer-app:
+    name: Stage 4 - Customer App
+    needs: stage-3-realtime-websockets
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm test -- --maxWorkers=1 --run src/test/app.customer.test.tsx src/test/waitTimeCard.test.tsx
+
+  stage-5-staff-app:
+    name: Stage 5 - Staff App
+    needs: stage-4-customer-app
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run check
+      - run: npm run lint
+
+  stage-6-admin-dashboard:
+    name: Stage 6 - Admin Dashboard
+    needs: stage-5-staff-app
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run build
+
+  stage-3-realtime-websockets:
+    name: Stage 3 - Real-Time WebSockets
+    needs: stage-2-queue-engine
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      ENVIRONMENT: test
+      DATABASE_URL: sqlite:///./queueless-ci.db
+      JWT_SECRET: queueless-ci-only-secret-value-at-least-32-bytes
+      SECRET_KEY: queueless-ci-other-secret-value-at-least-32-bytes
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: python -m pip install -r requirements.txt
+      - run: python -m pytest -q tests/test_realtime_websocket.py
+
+  stage-7-ai-prediction:
+    name: Stage 7 - AI Prediction
+    needs: stage-6-admin-dashboard
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      ENVIRONMENT: test
+      DATABASE_URL: sqlite:///./queueless-ci.db
+      JWT_SECRET: queueless-ci-only-secret-value-at-least-32-bytes
+      SECRET_KEY: queueless-ci-other-secret-value-at-least-32-bytes
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: python -m pip install -r requirements.txt
+      - run: python -m pytest -q tests/test_ai_prediction.py
+
+  stage-8-qr-notifications:
+    name: Stage 8 - QR and Notifications
+    needs: stage-7-ai-prediction
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      ENVIRONMENT: test
+      DATABASE_URL: sqlite:///./queueless-ci.db
+      JWT_SECRET: queueless-ci-only-secret-value-at-least-32-bytes
+      SECRET_KEY: queueless-ci-other-secret-value-at-least-32-bytes
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: python -m pip install -r requirements.txt
+      - run: npm ci --prefix ../frontend
+      - run: python -m pytest -q tests/test_qr_notification_flow.py
+      - run: npm test --prefix ../frontend -- --maxWorkers=1 --run src/test/qrCode.test.tsx src/test/browserNotifications.test.ts
+
+  stage-9-testing-security:
+    name: Stage 9 - Testing and Security
+    needs: stage-8-qr-notifications
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      ENVIRONMENT: test
+      DATABASE_URL: sqlite:///./queueless-ci.db
+      JWT_SECRET: queueless-ci-only-secret-value-at-least-32-bytes
+      SECRET_KEY: queueless-ci-other-secret-value-at-least-32-bytes
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: python -m pip install -r requirements.txt
+      - run: python -m pip install pip-audit
+      - run: npm ci --prefix ../frontend
+      - run: python -m pytest -q tests
+      - run: python -m compileall -q app
+      - run: pip-audit -r requirements.txt
+      - run: npm audit --prefix ../frontend --omit=dev --audit-level=high
+      - run: npm run lint --prefix ../frontend
+      - run: npm test --prefix ../frontend -- --maxWorkers=1
+      - run: npm run build --prefix ../frontend
+      - run: npm exec --prefix ../frontend -- playwright install --with-deps chromium firefox webkit
+      - run: npm run test:e2e --prefix ../frontend
+
+  stage-10-deployment:
+    name: Stage 10 - Deployment
+    needs: stage-9-testing-security
+    if: >-
+      github.event_name != 'pull_request' &&
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/configure-pages@v5
+      - run: npm ci --prefix frontend
+      - name: Verify deployment URLs are configured
+        env:
+          VITE_API_URL: ${{ vars.VITE_API_URL }}
+          VITE_WS_URL: ${{ vars.VITE_WS_URL }}
+        run: |
+          test -n "$VITE_API_URL" || { echo "Set repository variable VITE_API_URL" >&2; exit 1; }
+          test -n "$VITE_WS_URL" || { echo "Set repository variable VITE_WS_URL" >&2; exit 1; }
+          case "$VITE_API_URL" in https://*) ;; *) echo "VITE_API_URL must use HTTPS" >&2; exit 1 ;; esac
+          case "$VITE_WS_URL" in wss://*) ;; *) echo "VITE_WS_URL must use WSS" >&2; exit 1 ;; esac
+      - name: Verify backend readiness
+        env:
+          API_URL: ${{ vars.VITE_API_URL }}
+        run: |
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error "${API_URL%/}/ready"; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "Backend did not become ready before frontend deployment" >&2
+          exit 1
+      - name: Build for GitHub Pages
+        run: npm run build --prefix frontend
+        env:
+          VITE_API_URL: ${{ vars.VITE_API_URL }}
+          VITE_WS_URL: ${{ vars.VITE_WS_URL }}
+          VITE_SENTRY_DSN: ${{ vars.VITE_SENTRY_DSN }}
+          VITE_POSTHOG_KEY: ${{ vars.VITE_POSTHOG_KEY }}
+          VITE_POSTHOG_HOST: ${{ vars.VITE_POSTHOG_HOST }}
+          VITE_BASE_PATH: ${{ vars.VITE_BASE_PATH }}
+      - name: Configure Pages SPA fallback
+        env:
+          VITE_BASE_PATH: ${{ vars.VITE_BASE_PATH }}
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFile, writeFile } from "node:fs/promises";
+
+          const configuredBase = process.env.VITE_BASE_PATH?.trim();
+          const [, repository] = process.env.GITHUB_REPOSITORY.split("/");
+          const base = configuredBase
+            ? `${configuredBase.replace(/\/+$/, "")}/`
+            : repository.endsWith(".github.io")
+              ? "/"
+              : `/${repository}/`;
+          const fallback = await readFile("frontend/dist/404.html", "utf8");
+          await writeFile(
+            "frontend/dist/404.html",
+            fallback.replace(
+              'const basePath = "/";',
+              `const basePath = ${JSON.stringify(base)};`,
+            ),
+            "utf8",
+          );
+          NODE
+          touch frontend/dist/.nojekyll
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: frontend/dist
+      - id: deployment
+        uses: actions/deploy-pages@v4
+
+  stage-11-monitoring-scaling:
+    name: Stage 11 - Monitoring and Scaling
+    needs: stage-10-deployment
+    if: >-
+      github.event_name != 'pull_request' &&
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check isolated staging load-test configuration
+        id: load-test-config
+        env:
+          BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+          SERVICE_ID: ${{ secrets.STAGING_SERVICE_ID }}
+          QUEUE_ID: ${{ secrets.STAGING_QUEUE_ID }}
+          LOAD_TEST_PASSWORD: ${{ secrets.STAGING_LOAD_TEST_PASSWORD }}
+        run: |
+          if [ -z "$BASE_URL" ] || [ -z "$SERVICE_ID" ] || [ -z "$QUEUE_ID" ] || [ -z "$LOAD_TEST_PASSWORD" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping k6: configure the isolated staging secrets to enable load testing."
+            exit 0
+          fi
+          case "$BASE_URL" in https://*) ;; *) echo "STAGING_BASE_URL must use HTTPS" >&2; exit 1 ;; esac
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+      - uses: grafana/setup-k6-action@v1
+        if: steps.load-test-config.outputs.enabled == 'true'
+      - name: Run k6 against isolated staging
+        if: steps.load-test-config.outputs.enabled == 'true'
+        env:
+          BASE_URL: ${{ secrets.STAGING_BASE_URL }}
+          SERVICE_ID: ${{ secrets.STAGING_SERVICE_ID }}
+          QUEUE_ID: ${{ secrets.STAGING_QUEUE_ID }}
+          LOAD_TEST_PASSWORD: ${{ secrets.STAGING_LOAD_TEST_PASSWORD }}
+        run: k6 run loadtests/queue.js

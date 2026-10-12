@@ -12,6 +12,12 @@ describe("serviceJoinUrl", () => {
       .toBe("https://queueless.example/join/branch-456/service-123");
   });
 
+  it("keeps a deployment base path in the scannable URL", () => {
+    expect(
+      serviceJoinUrl("service-123", "branch-456", "https://queueless.example", "/app/"),
+    ).toBe("https://queueless.example/app/join/branch-456/service-123");
+  });
+
   it("does not build a URL without a service identifier", () => {
     expect(() => serviceJoinUrl(" ", null, "https://queueless.example")).toThrow("Service ID is required");
   });

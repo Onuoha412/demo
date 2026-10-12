@@ -35,24 +35,29 @@ async def queue_socket(websocket: WebSocket, queue_id: UUID) -> None:
     if ticket:
         ticket_data = await cache.consume_websocket_ticket(ticket)
         if ticket_data and ticket_data.get("queue_id") == str(queue_id):
-            with SessionLocal() as db:
-                user = db.get(User, ticket_data["user_id"])
-                queue = db.scalar(select(Queue).where(Queue.id == queue_id))
-                if user is None or not user.is_active or queue is None:
-                    user = None
-                elif user.role is UserRole.STAFF and queue.service.branch_id != user.branch_id:
-                    user = None
-                elif user.role not in (UserRole.CUSTOMER, UserRole.STAFF, UserRole.ADMIN):
-                    user = None
-                elif user.role is UserRole.CUSTOMER:
-                    has_entry = db.scalar(
-                        select(QueueEntry.id).where(
-                            QueueEntry.queue_id == queue_id,
-                            QueueEntry.customer_id == user.id,
-                        )
-                    )
-                    if has_entry is None:
+            try:
+                ticket_user_id = UUID(ticket_data["user_id"])
+            except (KeyError, TypeError, ValueError):
+                user = None
+            else:
+                with SessionLocal() as db:
+                    user = db.get(User, ticket_user_id)
+                    queue = db.scalar(select(Queue).where(Queue.id == queue_id))
+                    if user is None or not user.is_active or queue is None:
                         user = None
+                    elif user.role is UserRole.STAFF and queue.service.branch_id != user.branch_id:
+                        user = None
+                    elif user.role not in (UserRole.CUSTOMER, UserRole.STAFF, UserRole.ADMIN):
+                        user = None
+                    elif user.role is UserRole.CUSTOMER:
+                        has_entry = db.scalar(
+                            select(QueueEntry.id).where(
+                                QueueEntry.queue_id == queue_id,
+                                QueueEntry.customer_id == user.id,
+                            )
+                        )
+                        if has_entry is None:
+                            user = None
 
     if user is None:
         await websocket.close(code=4403)

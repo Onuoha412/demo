@@ -1,4 +1,5 @@
 import os
+import tempfile
 from collections.abc import Generator
 from pathlib import Path
 
@@ -9,10 +10,15 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
 
-TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL")
+_TEST_DIRECTORY = tempfile.TemporaryDirectory(prefix="queueless-tests-")
+TEST_DATABASE_URL = os.getenv(
+    "TEST_DATABASE_URL",
+    f"sqlite:///{Path(_TEST_DIRECTORY.name) / 'queueless-tests.db'}",
+)
+if not TEST_DATABASE_URL.startswith("sqlite:"):
+    raise RuntimeError("Tests require a SQLite TEST_DATABASE_URL")
 os.environ.setdefault("JWT_SECRET_KEY", "queueless-test-only-secret-not-for-deployment-32-bytes")
-if TEST_DATABASE_URL:
-    os.environ.setdefault("DATABASE_URL", TEST_DATABASE_URL)
+os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 
 
 @pytest.fixture(autouse=True)
@@ -25,21 +31,25 @@ def clear_fastapi_dependency_overrides():
 
 @pytest.fixture(scope="session")
 def database_engine() -> Generator[Engine, None, None]:
-    if not TEST_DATABASE_URL:
-        pytest.skip("Set TEST_DATABASE_URL to run PostgreSQL integration tests")
-    engine = create_engine(TEST_DATABASE_URL, pool_pre_ping=True)
-    try:
-        with engine.connect() as connection:
-            connection.execute(text("SELECT 1"))
-    except Exception as exc:
-        engine.dispose()
-        pytest.skip(f"PostgreSQL is unavailable: {exc}")
+    engine = create_engine(
+        TEST_DATABASE_URL,
+        connect_args={"check_same_thread": False, "timeout": 60},
+        pool_pre_ping=True,
+    )
+    with engine.connect() as connection:
+        connection.execute(text("PRAGMA foreign_keys=ON"))
+        connection.execute(text("PRAGMA journal_mode=WAL"))
+        connection.execute(text("SELECT 1"))
     alembic_config = Config(str(Path(__file__).parents[1] / "alembic.ini"))
     alembic_config.set_main_option("sqlalchemy.url", TEST_DATABASE_URL)
     command.upgrade(alembic_config, "head")
     yield engine
     command.downgrade(alembic_config, "base")
     engine.dispose()
+
+
+def pytest_unconfigure() -> None:
+    _TEST_DIRECTORY.cleanup()
 
 
 @pytest.fixture

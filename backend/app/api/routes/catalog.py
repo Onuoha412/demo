@@ -1,6 +1,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ...db.session import get_db
@@ -31,14 +32,19 @@ def services(
     branch_id: UUID | None = Query(None),
     db: Session = Depends(get_db),
 ) -> list[ServiceSummary]:
-    query = db.query(Service).filter(Service.is_active.is_(True))
+    filters = [Service.is_active.is_(True)]
     if branch_id:
-        query = query.filter(Service.branch_id == branch_id)
-    items = query.order_by(Service.name).all()
-    queue_by_service = {
-        queue.service_id: queue.id
-        for queue in db.query(Queue.id, Queue.service_id).all()
-    }
+        filters.append(Service.branch_id == branch_id)
+    queue_id = (
+        select(Queue.id)
+        .where(Queue.service_id == Service.id)
+        .order_by(Queue.created_at)
+        .limit(1)
+        .scalar_subquery()
+    )
+    items = db.execute(
+        select(Service, queue_id).where(*filters).order_by(Service.name)
+    ).all()
     return [
         ServiceSummary(
             id=item.id,
@@ -47,9 +53,9 @@ def services(
             code=item.code,
             description=item.description,
             average_service_minutes=item.average_service_minutes,
-            queue_id=queue_by_service.get(item.id),
+            queue_id=service_queue_id,
         )
-        for item in items
+        for item, service_queue_id in items
     ]
 
 

@@ -25,6 +25,14 @@ def dashboard(user: User = Depends(require_staff), db: Session = Depends(get_db)
             .order_by(Queue.name)
         )
     )
+    counts_by_queue: dict[UUID, dict[QueueEntryStatus, int]] = {}
+    if queues:
+        for queue_id, entry_status, count in db.execute(
+            select(QueueEntry.queue_id, QueueEntry.status, func.count(QueueEntry.id))
+            .where(QueueEntry.queue_id.in_([queue.id for queue in queues]))
+            .group_by(QueueEntry.queue_id, QueueEntry.status)
+        ):
+            counts_by_queue.setdefault(queue_id, {})[entry_status] = count
     counters = list(
         db.scalars(
             select(Counter).where(Counter.branch_id == user.branch_id).order_by(Counter.number)
@@ -32,13 +40,7 @@ def dashboard(user: User = Depends(require_staff), db: Session = Depends(get_db)
     )
     queue_data = []
     for queue in queues:
-        counts = dict(
-            db.execute(
-                select(QueueEntry.status, func.count(QueueEntry.id))
-                .where(QueueEntry.queue_id == queue.id)
-                .group_by(QueueEntry.status)
-            ).all()
-        )
+        counts = counts_by_queue.get(queue.id, {})
         queue_data.append(
             {
                 "id": queue.id,

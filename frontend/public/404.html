@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>QueueLess</title>
+  </head>
+  <body>
+    <script>
+      const basePath = "/";
+      sessionStorage.setItem(
+        "queueless:pages-path",
+        location.pathname + location.search + location.hash,
+      );
+      location.replace(basePath);
+    </script>
+  </body>
+</html>

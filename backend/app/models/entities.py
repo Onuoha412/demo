@@ -15,11 +15,11 @@ from sqlalchemy import (
     JSON,
     String,
     Text,
+    Uuid,
     UniqueConstraint,
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..db.base import Base
@@ -74,6 +74,7 @@ class QueueEventType(str, enum.Enum):
     CANCELLED = "cancelled"
     PAUSED = "paused"
     RESUMED = "resumed"
+    CLOSED = "closed"
 
 
 class NotificationType(str, enum.Enum):
@@ -83,6 +84,7 @@ class NotificationType(str, enum.Enum):
     SERVICE_COMPLETED = "service_completed"
     QUEUE_PAUSED = "queue_paused"
     QUEUE_RESUMED = "queue_resumed"
+    QUEUE_CLOSED = "queue_closed"
     QUEUE_UPDATE = "queue_update"
     TURN_APPROACHING = "turn_approaching"
     TURN_CALLED = "turn_called"
@@ -92,7 +94,7 @@ class NotificationType(str, enum.Enum):
 class TimestampedEntity(TimestampMixin, Base):
     __abstract__ = True
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
 
 
@@ -129,6 +131,15 @@ class User(TimestampedEntity):
     full_name: Mapped[str] = mapped_column(String(160), nullable=False)
     email: Mapped[str] = mapped_column(String(320), nullable=False, unique=True)
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    google_id: Mapped[str | None] = mapped_column(String(255), unique=True)
+    avatar_url: Mapped[str | None] = mapped_column(String(2048))
+    auth_provider: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="local", server_default="local"
+    )
+    email_verified: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     role: Mapped[UserRole] = mapped_column(
         Enum(
             UserRole,
@@ -148,9 +159,75 @@ class User(TimestampedEntity):
     branch: Mapped[Branch | None] = relationship(
         back_populates="staff_users", foreign_keys=[branch_id]
     )
-    queue_entries: Mapped[list[QueueEntry]] = relationship(back_populates="customer")
+    queue_entries: Mapped[list[QueueEntry]] = relationship(
+        back_populates="customer", foreign_keys="QueueEntry.customer_id"
+    )
     notifications: Mapped[list[Notification]] = relationship(
         back_populates="user", cascade="all, delete-orphan"
+    )
+    sessions: Mapped[list[AuthSession]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+    password_reset_tokens: Mapped[list[PasswordResetToken]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )
+
+
+class AuthSession(Base):
+    __tablename__ = "sessions"
+    __table_args__ = (
+        Index("ix_sessions_user_expires", "user_id", "expires_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    session_token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    user: Mapped[User] = relationship(back_populates="sessions")
+
+
+class PasswordResetToken(Base):
+    __tablename__ = "password_reset_tokens"
+    __table_args__ = (
+        Index("ix_password_reset_tokens_user", "user_id"),
+        Index("ix_password_reset_tokens_expires", "expires_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    user: Mapped[User] = relationship(back_populates="password_reset_tokens")
+
+
+class AuthRateLimit(Base):
+    __tablename__ = "auth_rate_limits"
+
+    bucket_key: Mapped[str] = mapped_column(String(128), primary_key=True)
+    count: Mapped[int] = mapped_column(Integer, nullable=False)
+    window_started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
     )
 
 
@@ -188,6 +265,7 @@ class Service(TimestampedEntity):
     __table_args__ = (
         UniqueConstraint("branch_id", "code", name="uq_services_branch_code"),
         Index("ix_services_branch_id", "branch_id"),
+        CheckConstraint("average_service_minutes > 0"),
     )
 
     branch_id: Mapped[uuid.UUID] = mapped_column(
@@ -246,6 +324,7 @@ class Queue(TimestampedEntity):
         UniqueConstraint("service_id", "name", name="uq_queues_service_name"),
         Index("ix_queues_service_id", "service_id"),
         Index("ix_queues_status", "status"),
+        CheckConstraint("current_number >= 0"),
     )
 
     service_id: Mapped[uuid.UUID] = mapped_column(
@@ -282,6 +361,7 @@ class QueueEntry(TimestampedEntity):
     __table_args__ = (
         UniqueConstraint("queue_id", "queue_number", name="uq_queue_entries_queue_number"),
         Index("ix_queue_entries_queue_status", "queue_id", "status"),
+        Index("ix_queue_entries_position", "queue_id", "status", "queue_number"),
         Index("ix_queue_entries_customer_id", "customer_id"),
         CheckConstraint("queue_number > 0", name="ck_queue_entries_queue_number_positive"),
         CheckConstraint(
@@ -318,9 +398,17 @@ class QueueEntry(TimestampedEntity):
     counter_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("counters.id", ondelete="SET NULL")
     )
+    request_note: Mapped[str | None] = mapped_column(Text)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    verified_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
 
     queue: Mapped[Queue] = relationship(back_populates="entries")
-    customer: Mapped[User] = relationship(back_populates="queue_entries")
+    customer: Mapped[User] = relationship(
+        back_populates="queue_entries", foreign_keys=[customer_id]
+    )
+    verified_by: Mapped[User | None] = relationship(foreign_keys=[verified_by_user_id])
     counter: Mapped[Counter | None] = relationship(back_populates="queue_entries")
     events: Mapped[list[QueueEvent]] = relationship(
         back_populates="queue_entry", cascade="all, delete-orphan"
@@ -339,7 +427,7 @@ class QueueEvent(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     queue_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("queues.id", ondelete="CASCADE"), nullable=False
@@ -359,7 +447,7 @@ class QueueEvent(Base):
     )
     metadata_: Mapped[dict] = mapped_column(
         "metadata",
-        JSON().with_variant(JSONB, "postgresql"), nullable=False, server_default="{}"
+        JSON(), nullable=False, server_default="{}"
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
@@ -378,7 +466,7 @@ class Notification(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="CASCADE"), nullable=False
@@ -444,7 +532,7 @@ class Feedback(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+        Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     queue_entry_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("queue_entries.id", ondelete="CASCADE"), nullable=False, unique=True

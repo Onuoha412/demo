@@ -4,9 +4,35 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
-  frontend-check:
+  backend:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      ENVIRONMENT: test
+      DATABASE_URL: sqlite:///./queueless-tests.db
+      JWT_SECRET: queueless-tests-only-secret-value-at-least-32-bytes
+      SECRET_KEY: queueless-tests-other-secret-value-at-least-32-bytes
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - run: python -m pip install -r requirements.txt
+      - run: python -m pytest -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -14,5 +40,7 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      - run: npm ci --prefix frontend
-      - run: npm run check --prefix frontend
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test -- --maxWorkers=1
+      - run: npm run build
