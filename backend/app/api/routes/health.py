@@ -16,6 +16,16 @@ def health() -> HealthResponse:
     return HealthResponse(service=settings.app_name)
 
 
+@router.get("/")
+def api_root() -> dict[str, str]:
+    return {
+        "service": settings.app_name,
+        "status": "ok",
+        "health": "/health",
+        "readiness": "/ready",
+    }
+
+
 @router.get("/ready")
 async def readiness() -> dict[str, str]:
     try:

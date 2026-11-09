@@ -6,6 +6,13 @@ from app.main import app, create_app
 client = TestClient(app)
 
 
+def test_api_root() -> None:
+    response = client.get("/")
+    assert response.status_code == 200
+    assert response.json()["service"] == "QueueLess API"
+    assert response.json()["health"] == "/health"
+
+
 def test_health() -> None:
     response = client.get("/health")
     assert response.status_code == 200
