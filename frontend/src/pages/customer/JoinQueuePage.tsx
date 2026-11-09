@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { ErrorState } from "../../components/common/ErrorState";
 import { LoadingState } from "../../components/common/LoadingState";
@@ -10,6 +10,8 @@ import { captureProductEvent } from "../../observability";
 
 export function JoinQueuePage() {
   const { serviceId = "", branchId } = useParams();
+  const [searchParams] = useSearchParams();
+  const queueId = searchParams.get("queue_id") ?? undefined;
   const navigate = useNavigate();
   const [requestNote, setRequestNote] = useState("");
   const trackedServiceIdRef = useRef("");
@@ -21,7 +23,7 @@ export function JoinQueuePage() {
     }
   }, [service.data]);
   const mutation = useMutation({
-    mutationFn: () => joinService(serviceId, branchId, requestNote),
+    mutationFn: () => joinService(serviceId, branchId, requestNote, queueId),
     onSuccess: (result) => navigate(`/queue/${result.id}`),
   });
   const branchMismatch = Boolean(branchId && service.data && service.data.branch_id !== branchId);

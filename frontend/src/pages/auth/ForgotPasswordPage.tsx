@@ -5,7 +5,7 @@ import { AuthLayout } from "../../components/auth/AuthLayout";
 import { ApiError } from "../../services/api";
 import { forgotPassword } from "../../services/auth";
 
-export function ForgotPasswordPage() {
+export function ForgotPasswordPage({ loginPath = "/login" }: { loginPath?: string }) {
   const [email, setEmail] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -38,7 +38,7 @@ export function ForgotPasswordPage() {
           {pending ? "Sending..." : "Send reset link"}
         </button>
       </form>
-      <Link to="/login" className="mt-5 inline-block text-sm font-semibold text-emerald-700">Back to sign in</Link>
+      <Link to={loginPath} className="mt-5 inline-block text-sm font-semibold text-emerald-700">Back to sign in</Link>
     </AuthLayout>
   );
 }

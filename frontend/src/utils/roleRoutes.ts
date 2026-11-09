@@ -6,6 +6,8 @@ export function roleHomePath(role: User["role"]): string {
       return "/staff/dashboard";
     case "admin":
       return "/admin/dashboard";
+    case "super_admin":
+      return "/super-admin/dashboard";
     case "customer":
       return "/";
   }
@@ -17,6 +19,8 @@ export function roleLoginPath(role: User["role"]): string {
       return "/staff/login";
     case "admin":
       return "/admin/login";
+    case "super_admin":
+      return "/super-admin/login";
     case "customer":
       return "/login";
   }

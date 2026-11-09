@@ -7,10 +7,14 @@ from sqlalchemy.orm import Session
 from app.api.auth_dependencies import get_db
 from app.core.security import create_access_token, hash_password, verify_password
 from app.main import app
+from app.main import create_app
 from app.models import (
+    AuditLog,
+    AuthSession,
     Branch,
     Notification,
     Organization,
+    OrganizationMembership,
     Queue,
     QueueEntry,
     QueueEvent,
@@ -27,7 +31,45 @@ def test_weak_jwt_secret_is_rejected() -> None:
         Settings(jwt_secret_key="too-short")
 
 
+def test_api_responses_have_security_and_no_store_headers() -> None:
+    client = TestClient(app)
+    response = client.get("/api/v1/health")
+    assert response.status_code == 200
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["x-frame-options"] == "DENY"
+    assert response.headers["referrer-policy"] == "no-referrer"
+    assert response.headers["permissions-policy"] == (
+        "camera=(), microphone=(), geolocation=()"
+    )
+    assert response.headers["cache-control"] == "no-store"
+    assert response.headers["pragma"] == "no-cache"
+
+
+def test_production_api_responses_enable_hsts(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app import main as main_module
+
+    monkeypatch.setattr(main_module.settings, "environment", "production")
+    with TestClient(create_app()) as client:
+        response = client.get("/api/v1/health")
+    assert response.headers["strict-transport-security"] == "max-age=31536000"
+
+
 def setup_client(db: Session, user: User) -> TestClient:
+    if user.role is UserRole.ADMIN and user.organization_id is not None:
+        membership = db.get(
+            OrganizationMembership,
+            (user.id, user.organization_id),
+        )
+        if membership is None:
+            db.add(
+                OrganizationMembership(
+                    user_id=user.id,
+                    organization_id=user.organization_id,
+                    role=UserRole.ADMIN.value,
+                )
+            )
+            db.commit()
+
     def override_db():
         yield db
 
@@ -56,6 +98,82 @@ def test_password_hashing_and_admin_access_control(db_session: Session) -> None:
     assert not verify_password("wrong-password", admin.password_hash)
     client = setup_client(db_session, customer)
     assert client.get("/api/v1/admin/organizations").status_code == 403
+    app.dependency_overrides.clear()
+
+
+def test_admin_can_manage_admin_accounts_and_deactivation_revokes_sessions(
+    db_session: Session,
+) -> None:
+    owner = User(
+        full_name="Platform Owner",
+        email=f"owner-{uuid.uuid4()}@example.test",
+        password_hash=hash_password("owner-password-123"),
+        role=UserRole.ADMIN,
+    )
+    owner.organization = Organization(
+        name="Owner Organization",
+        slug=f"owner-{uuid.uuid4()}",
+    )
+    db_session.add(owner)
+    db_session.commit()
+    client = setup_client(db_session, owner)
+
+    assert client.delete(f"/api/v1/admin/users/{owner.id}").status_code == 409
+    assert client.patch(
+        f"/api/v1/admin/users/{owner.id}", json={"role": "customer"}
+    ).status_code == 409
+
+    email = f"managed-admin-{uuid.uuid4()}@example.test"
+    created = client.post(
+        "/api/v1/admin/users",
+        json={
+            "full_name": "Managed Admin",
+            "email": email,
+            "password": "managed-password-123",
+            "role": "admin",
+        },
+    )
+    assert created.status_code == 201
+    assert created.json()["role"] == "admin"
+    assert "password_hash" not in created.json()
+
+    login = client.post(
+        "/api/v1/auth/login",
+        json={"email": email, "password": "managed-password-123"},
+    )
+    assert login.status_code == 200
+    managed_token = login.json()["session_token"]
+    managed_id = uuid.UUID(created.json()["id"])
+    membership = db_session.get(
+        OrganizationMembership,
+        (managed_id, owner.organization_id),
+    )
+    assert membership is not None
+    assert membership.role == UserRole.ADMIN.value
+    session_hash = db_session.query(AuthSession).filter_by(user_id=managed_id).one()
+
+    search = client.get(
+        "/api/v1/admin/users",
+        params={
+            "search": email,
+            "role": "admin",
+            "active": "true",
+            "auth_provider": "local",
+        },
+    )
+    assert search.status_code == 200
+    assert [user["id"] for user in search.json()["items"]] == [str(managed_id)]
+    assert search.json()["items"][0]["last_login_at"] is not None
+
+    deactivated = client.delete(f"/api/v1/admin/users/{managed_id}")
+    assert deactivated.status_code == 200
+    assert deactivated.json()["is_active"] is False
+    db_session.refresh(session_hash)
+    assert session_hash.revoked_at is not None
+    assert client.get(
+        "/api/v1/auth/me",
+        headers={"Authorization": f"Bearer {managed_token}"},
+    ).status_code == 401
     app.dependency_overrides.clear()
 
 
@@ -98,6 +216,14 @@ def test_admin_builds_customer_ready_service_without_hash_leak(db_session: Sessi
         f"/api/v1/admin/organizations/{organization_id}",
         json={"description": "Updated description"},
     ).json()["description"] == "Updated description"
+    organization_audits = db_session.query(AuditLog).filter(
+        AuditLog.target_id == organization_id
+    ).all()
+    assert {event.action for event in organization_audits} >= {
+        "organization.created",
+        "organization.updated",
+    }
+    assert all(event.actor_user_id == admin.id for event in organization_audits)
     branch = client.post(
         "/api/v1/admin/branches",
         json={"organization_id": organization_id, "name": "QA Branch"},
@@ -153,9 +279,32 @@ def test_admin_builds_customer_ready_service_without_hash_leak(db_session: Sessi
         "full_name": "Waiting Customer",
         "email": waiting_customer.email,
     }
+    waiting_customer.full_name = "=SUM(1,1)"
+    db_session.commit()
+    report = client.get("/api/v1/admin/reports/queue-entries.csv")
+    assert report.status_code == 200
+    assert report.headers["content-type"].startswith("text/csv")
+    assert "attachment;" in report.headers["content-disposition"]
+    assert "'=SUM(1,1)" in report.text
+    empty_report = client.get(
+        "/api/v1/admin/reports/queue-entries.csv",
+        params={"start": "2099-01-01T00:00:00Z"},
+    )
+    assert empty_report.status_code == 200
+    assert "Waiting Customer" not in empty_report.text
+    assert client.get(
+        "/api/v1/admin/reports/queue-entries.csv",
+        params={
+            "start": "2026-10-02T00:00:00Z",
+            "end": "2026-10-01T00:00:00Z",
+        },
+    ).status_code == 422
     customer_client = setup_client(db_session, waiting_customer)
     assert customer_client.get(
         f"/api/v1/admin/queues/{queue.json()['id']}/entries"
+    ).status_code == 403
+    assert customer_client.get(
+        "/api/v1/admin/reports/queue-entries.csv"
     ).status_code == 403
     assert client.patch(
         f"/api/v1/admin/queues/{queue.json()['id']}/status",
@@ -174,8 +323,8 @@ def test_admin_builds_customer_ready_service_without_hash_leak(db_session: Sessi
         json={"status": "open"},
     ).status_code == 409
     assert client.get("/api/v1/admin/organizations?page=1&page_size=1").status_code == 200
-    assert client.delete(f"/api/v1/admin/organizations/{organization_id}").status_code == 200
-    assert client.get(f"/api/v1/admin/organizations/{organization_id}").json()["is_active"] is False
+    assert client.delete(f"/api/v1/admin/organizations/{organization_id}").status_code == 403
+    assert client.get(f"/api/v1/admin/organizations/{organization_id}").json()["is_active"] is True
 
     assert client.post(
         "/api/v1/admin/users",
@@ -199,6 +348,12 @@ def test_admin_builds_customer_ready_service_without_hash_leak(db_session: Sessi
     assert staff_user.status_code == 201
     assert staff_user.json()["branch_id"] == branch.json()["id"]
     assert staff_user.json()["organization_id"] == organization_id
+    staff_membership = db_session.get(
+        OrganizationMembership,
+        (uuid.UUID(staff_user.json()["id"]), uuid.UUID(organization_id)),
+    )
+    assert staff_membership is not None
+    assert staff_membership.role == UserRole.STAFF.value
 
     created_user = client.post(
         "/api/v1/admin/users",
@@ -233,4 +388,115 @@ def test_admin_builds_customer_ready_service_without_hash_leak(db_session: Sessi
     analytics = client.get("/api/v1/admin/analytics")
     assert analytics.status_code == 200
     assert "completion_rate" in analytics.json()
+    app.dependency_overrides.clear()
+
+
+def test_admin_resources_and_reports_are_scoped_to_their_organization(
+    db_session: Session,
+) -> None:
+    first_organization = Organization(
+        name="First Tenant",
+        slug=f"first-{uuid.uuid4()}",
+    )
+    second_organization = Organization(
+        name="Second Tenant",
+        slug=f"second-{uuid.uuid4()}",
+    )
+    first_branch = Branch(name="First Branch", organization=first_organization)
+    second_branch = Branch(name="Second Branch", organization=second_organization)
+    first_service = Service(
+        name="First Service",
+        code="FIRST",
+        branch=first_branch,
+    )
+    second_service = Service(
+        name="Second Service",
+        code="SECOND",
+        branch=second_branch,
+    )
+    first_queue = Queue(name="First Queue", prefix="F", service=first_service)
+    second_queue = Queue(name="Second Queue", prefix="S", service=second_service)
+    admin = User(
+        full_name="First Tenant Admin",
+        email=f"{uuid.uuid4()}@example.test",
+        password_hash=hash_password("tenant-admin-password"),
+        role=UserRole.ADMIN,
+        organization=first_organization,
+    )
+    customer = User(
+        full_name="Tenant Customer",
+        email=f"{uuid.uuid4()}@example.test",
+        password_hash=hash_password("tenant-customer-password"),
+    )
+    other_customer = User(
+        full_name="Other Tenant Customer",
+        email=f"{uuid.uuid4()}@example.test",
+        password_hash=hash_password("other-tenant-password"),
+    )
+    db_session.add_all([first_queue, second_queue, admin, customer, other_customer])
+    db_session.flush()
+    db_session.add(
+        QueueEntry(
+            queue=first_queue,
+            customer=customer,
+            queue_number=1,
+        )
+    )
+    db_session.add(
+        QueueEntry(
+            queue=second_queue,
+            customer=other_customer,
+            queue_number=1,
+        )
+    )
+    db_session.commit()
+
+    client = setup_client(db_session, admin)
+    branches = client.get("/api/v1/admin/branches")
+    assert branches.status_code == 200
+    assert [branch["id"] for branch in branches.json()["items"]] == [
+        str(first_branch.id)
+    ]
+    services = client.get("/api/v1/admin/services")
+    assert [service["id"] for service in services.json()["items"]] == [
+        str(first_service.id)
+    ]
+    queues = client.get("/api/v1/admin/queues")
+    assert [queue["id"] for queue in queues.json()["items"]] == [
+        str(first_queue.id)
+    ]
+    users = client.get("/api/v1/admin/users")
+    assert users.status_code == 200
+    assert "Other Tenant Customer" not in {
+        user["full_name"] for user in users.json()["items"]
+    }
+    analytics = client.get("/api/v1/admin/analytics")
+    assert analytics.status_code == 200
+    assert analytics.json()["organizations"] == 1
+    assert analytics.json()["services"] == 1
+    assert analytics.json()["queues"] == 1
+    assert analytics.json()["queue_entries"] == 1
+    assert client.get(
+        f"/api/v1/admin/branches/{second_branch.id}"
+    ).status_code == 404
+    assert client.get(
+        f"/api/v1/admin/queues/{second_queue.id}/entries"
+    ).status_code == 404
+    assert client.post(
+        "/api/v1/admin/services",
+        json={
+            "branch_id": str(second_branch.id),
+            "name": "Unauthorized Service",
+            "code": "DENIED",
+        },
+    ).status_code == 404
+    assert client.post(
+        "/api/v1/admin/organizations",
+        json={"name": "Unauthorized Tenant", "slug": f"unauthorized-{uuid.uuid4()}"},
+    ).status_code == 403
+
+    report = client.get("/api/v1/admin/reports/queue-entries.csv")
+    assert report.status_code == 200
+    assert "First Queue" in report.text
+    assert "Second Queue" not in report.text
     app.dependency_overrides.clear()

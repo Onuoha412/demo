@@ -1,42 +1,72 @@
 # Runtime limits and operations
 
-QueueLess currently targets a single backend instance with a persistent SQLite
-database file. SQLite serializes writes and the queue service acquires the
-writer lock before reading or changing queue state. WAL mode permits concurrent
-readers, but SQLite remains a single-writer database.
+QueueLess supports SQLite and PostgreSQL. SQLite is appropriate for a single
+API instance with moderate write concurrency; it serializes writers. PostgreSQL
+provides row-level locks and shared database access, but does not by itself
+make the application horizontally scalable.
 
 ## Supported deployment shape
 
-- One API process and one worker per database file.
-- Persistent local storage for SQLite; do not place the file on a network
-  filesystem or mount one file into multiple service instances.
-- WebSocket broadcasts and short-lived tickets are process-local. Reconnecting
-  clients should refetch queue state from the API.
-- Notifications and queue events are durable SQLite records. WebSocket
-  delivery is an update signal, not the source of truth.
+- With SQLite, run exactly one API instance against the persistent database
+  file.
+- PostgreSQL can be shared by multiple API processes when Redis is configured
+  for shared realtime state.
+- Keep the database on durable storage; container-local filesystems may be
+  ephemeral and are not a backup.
+- WAL mode and a bounded busy timeout are enabled for concurrent local readers
+  and writes when SQLite is used. Queue-number allocation uses an atomic
+  database update.
+- Authenticated and public queue WebSocket clients reconnect with an event
+  cursor; the API replays durable outbox events or sends a current queue
+  snapshot, while clients still refetch state after reconnecting.
+- Queue connection-attempt protection defaults to 1,000 attempts per queue per
+  minute and is configurable with `REALTIME_QUEUE_CONNECTION_LIMIT`; clients
+  also refetch every 15 seconds while disconnected or stale.
+- Redis shares WebSocket broadcasts, one-time WebSocket tickets, and
+  rate-limit counters across API processes. Reconnecting clients still refetch
+  durable queue state.
 
-Do not add backend replicas or workers as a performance shortcut. A future
-multi-instance design needs a shared transactional database and shared
-real-time coordination; it is not achieved by mounting SQLite across nodes.
+Do not add replicas or workers that use separate SQLite files. PostgreSQL is
+the first step for shared concurrent writes, not a promise of a specific
+account count, request rate, or latency.
+
+## High-concurrency readiness
+
+The current application has not been load-tested or certified for 5 million
+simultaneously active users or 100k+ requests per second. Before scaling,
+operate PostgreSQL and Redis as managed shared services, use a load-balanced
+stateless API tier, configure database connection pooling (typically via
+PgBouncer where appropriate), profile queries and indexes, and run capacity
+tests using production-shaped queue, account, and event data. Durable event
+delivery, analytics isolation, and retention/partitioning still need
+workload-specific design.
+
+Five million stored accounts is a data-volume requirement and is not equivalent
+to five million users making requests concurrently. Size and load-test account
+lookups, sessions, queue history, and backups against the expected record mix
+and traffic. No capacity claim should be made until repeatable tests establish
+throughput, latency, recovery, and error-rate targets on the selected host and
+database.
 
 ## Health, backups, and monitoring
 
 - `GET /health` checks process liveness; `GET /ready` checks database
   availability.
-- Monitor API latency and errors, SQLite busy/locked errors, disk utilization,
-  WebSocket disconnects, and backup completion.
-- Use SQLite's online backup API or a service snapshot to back up a live WAL
-  database. Verify restoration periodically in an isolated environment.
+- Back up SQLite with SQLite's online backup mechanism or a quiesced/copy-safe
+  procedure; do not assume a live copy of a WAL database includes all
+  committed data.
+- Use the managed or operator-approved backup procedure for PostgreSQL.
+- Verify restore periodically on an isolated instance.
 - Keep Sentry optional and avoid sending credentials, customer details, or
   queue-entry information to monitoring metadata.
-- Use client reconnect/backoff and refetch current queue state after
-  reconnecting; real-time events are not replayed.
+- Use client reconnect/backoff and refetch current state after reconnecting;
+  real-time events are not replayed.
 
 ## Load validation
 
-Before production use, run the SQLite-backed test suite including concurrent
-queue joins, then exercise expected peak traffic against a disposable copy of
-the deployment configuration. Measure writer contention, request latency, disk
-growth, restart recovery, and real-time client reconnection. Increase a timeout
-or instance size only when measurements identify the bottleneck; capacity and
-latency guarantees must be established on the selected hosting plan.
+Run the backend suite against its disposable SQLite database, then exercise
+expected peak traffic against an isolated deployment using the same instance
+size and persistent-disk configuration as production. Measure API latency,
+database contention, disk capacity, restart recovery, and realtime
+reconnection. Database throughput is workload- and storage-dependent; validate
+capacity before increasing traffic.

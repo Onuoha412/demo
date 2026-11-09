@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from ..models.entities import UserRole
 
@@ -15,6 +15,7 @@ class RegisterRequest(BaseModel):
     )
     password: str = Field(min_length=8, max_length=128)
     organization_id: UUID | None = None
+    organization_name: str | None = Field(default=None, min_length=2, max_length=160)
 
     @field_validator("full_name")
     @classmethod
@@ -28,6 +29,22 @@ class RegisterRequest(BaseModel):
     @classmethod
     def normalize_email(cls, value: str) -> str:
         return value.strip().lower()
+
+    @field_validator("organization_name")
+    @classmethod
+    def clean_organization_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if len(value) < 2:
+            raise ValueError("Organization must contain at least 2 characters")
+        return value
+
+    @model_validator(mode="after")
+    def validate_organization_choice(self) -> "RegisterRequest":
+        if self.organization_id is not None and self.organization_name is not None:
+            raise ValueError("Choose an organization ID or organization name, not both")
+        return self
 
 
 class LoginRequest(BaseModel):
@@ -61,6 +78,24 @@ class ResetPasswordRequest(BaseModel):
     token: str = Field(min_length=32, max_length=256)
     password: str = Field(min_length=8, max_length=128)
 
+
+class ProfileUpdateRequest(BaseModel):
+    full_name: str = Field(min_length=2, max_length=160)
+
+    @field_validator("full_name")
+    @classmethod
+    def clean_name(cls, value: str) -> str:
+        value = value.strip()
+        if len(value) < 2:
+            raise ValueError("Full name must contain at least 2 characters")
+        return value
+
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)
+
+
 class WebSocketTicketRequest(BaseModel):
     queue_id: UUID
 
@@ -68,16 +103,6 @@ class WebSocketTicketRequest(BaseModel):
 class WebSocketTicketResponse(BaseModel):
     ticket: str
     expires_in: int = 30
-
-
-class GoogleSignInChallenge(BaseModel):
-    client_id: str
-    nonce: str
-
-
-class GoogleCredentialRequest(BaseModel):
-    credential: str = Field(min_length=1, max_length=8192)
-    nonce: str = Field(min_length=32, max_length=128)
 
 
 class AuthUserResponse(BaseModel):
@@ -99,6 +124,13 @@ class AuthUserResponse(BaseModel):
 class AuthResponse(BaseModel):
     user: AuthUserResponse
     session_token: str
+
+
+class PendingOrganizationApprovalResponse(BaseModel):
+    status: str = "pending_approval"
+    email: str
+    organization_name: str
+    message: str
 
 
 class ResetTokenStatus(BaseModel):

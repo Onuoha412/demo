@@ -2,18 +2,24 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from ...db.session import get_db
-from ...api.auth_dependencies import get_current_user, require_staff
-from ...models import Queue, QueueEntry, User
+from ...api.auth_dependencies import (
+    get_current_user,
+    has_active_organization_admin_membership,
+    require_staff,
+)
+from ...models import Queue, QueueEntry, Service, User
 from ...models.entities import UserRole
 from ...schemas.queue import (
     CounterActionRequest,
     JoinQueueRequest,
     PositionResponse,
     QueueEntryResponse,
+    QueuePriorityRequest,
     QueueResponse,
+    QueueTransferRequest,
 )
 from ...services.queue import QueueService
 
@@ -21,7 +27,7 @@ router = APIRouter(prefix="/queues", tags=["queues"])
 entry_router = APIRouter(prefix="/queue-entries", tags=["queue-entries"])
 
 
-@router.post("/{queue_id}/join", response_model=QueueEntryResponse, status_code=status.HTTP_201_CREATED)
+@router.post("/{queue_id}/join", response_model=PositionResponse, status_code=status.HTTP_201_CREATED)
 def join_queue(
     queue_id: UUID,
     payload: JoinQueueRequest,
@@ -30,7 +36,11 @@ def join_queue(
 ):
     if user.role is not UserRole.CUSTOMER or user.id != payload.customer_id:
         raise HTTPException(status_code=403, detail="Customers may only join queues for themselves")
-    return QueueService(db).join(queue_id, payload.customer_id)
+    return QueueService(db).join(
+        queue_id,
+        payload.customer_id,
+        request_note=payload.request_note,
+    )
 
 
 @router.get("/{queue_id}", response_model=QueueResponse)
@@ -95,6 +105,69 @@ def skip_entry(
 ):
     _ensure_entry_branch(db, entry_id, user)
     return QueueService(db).skip(entry_id)
+
+
+@entry_router.post("/{entry_id}/priority", response_model=QueueEntryResponse)
+def set_entry_priority(
+    entry_id: UUID,
+    payload: QueuePriorityRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_staff),
+):
+    _ensure_entry_branch(db, entry_id, user)
+    return QueueService(db).set_priority(entry_id, payload.priority, user.id)
+
+
+@entry_router.post("/{entry_id}/transfer", response_model=PositionResponse)
+def transfer_entry(
+    entry_id: UUID,
+    payload: QueueTransferRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    if user.role not in (UserRole.STAFF, UserRole.ADMIN, UserRole.SUPER_ADMIN):
+        raise HTTPException(status_code=403, detail="Staff or Admin access required")
+    source = db.scalar(
+        select(QueueEntry)
+        .options(
+            joinedload(QueueEntry.queue)
+            .joinedload(Queue.service)
+            .joinedload(Service.branch)
+        )
+        .where(QueueEntry.id == entry_id)
+    )
+    target = db.scalar(
+        select(Queue)
+        .options(joinedload(Queue.service).joinedload(Service.branch))
+        .where(Queue.id == payload.target_queue_id)
+    )
+    if source is None or target is None:
+        raise HTTPException(
+            status_code=404, detail="Queue transfer destination not found"
+        )
+
+    source_branch = source.queue.service.branch
+    target_branch = target.service.branch
+    if user.role is UserRole.STAFF:
+        if (
+            user.branch_id is None
+            or source_branch.id != user.branch_id
+            or target_branch.id != user.branch_id
+        ):
+            raise HTTPException(
+                status_code=404, detail="Queue transfer destination not found"
+            )
+    elif user.role is UserRole.ADMIN:
+        if (
+            not has_active_organization_admin_membership(db, user)
+            or user.organization_id is None
+            or source_branch.organization_id != user.organization_id
+            or target_branch.organization_id != user.organization_id
+        ):
+            raise HTTPException(
+                status_code=404, detail="Queue transfer destination not found"
+            )
+    return QueueService(db).transfer(entry_id, target.id, user.id)
 
 
 @entry_router.post("/{entry_id}/cancel", response_model=QueueEntryResponse)

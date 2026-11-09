@@ -47,6 +47,8 @@ def dashboard(user: User = Depends(require_staff), db: Session = Depends(get_db)
                 "name": queue.name,
                 "prefix": queue.prefix,
                 "status": queue.status,
+                "capacity_limit": queue.capacity_limit,
+                "priority_enabled": queue.priority_enabled,
                 "waiting_count": counts.get(QueueEntryStatus.WAITING, 0),
                 "serving_count": counts.get(QueueEntryStatus.SERVING, 0),
                 "completed_count": counts.get(QueueEntryStatus.COMPLETED, 0),
@@ -88,7 +90,7 @@ def customers(user: User = Depends(require_staff), db: Session = Depends(get_db)
             .join(Queue)
             .join(Queue.service)
             .where(Queue.service.has(branch_id=user.branch_id))
-            .options(joinedload(QueueEntry.customer))
+            .options(joinedload(QueueEntry.customer), joinedload(QueueEntry.queue))
             .order_by(QueueEntry.joined_at.desc())
             .limit(100)
         )
@@ -96,6 +98,9 @@ def customers(user: User = Depends(require_staff), db: Session = Depends(get_db)
     return [
         {
             "entry_id": entry.id,
+            "queue_id": entry.queue_id,
+            "queue_name": entry.queue.name,
+            "queue_prefix": entry.queue.prefix,
             "queue_number": entry.queue_number,
             "status": entry.status,
             "customer": {"id": entry.customer.id, "full_name": entry.customer.full_name, "email": entry.customer.email},
@@ -107,7 +112,7 @@ def customers(user: User = Depends(require_staff), db: Session = Depends(get_db)
 
 @router.get("/history")
 def history(user: User = Depends(require_staff), db: Session = Depends(get_db)):
-    return list(
+    entries = list(
         db.scalars(
             select(QueueEntry)
             .join(Queue)
@@ -116,10 +121,29 @@ def history(user: User = Depends(require_staff), db: Session = Depends(get_db)):
                 Queue.service.has(branch_id=user.branch_id),
                 QueueEntry.status.in_([QueueEntryStatus.COMPLETED, QueueEntryStatus.SKIPPED]),
             )
+            .options(joinedload(QueueEntry.customer), joinedload(QueueEntry.queue))
             .order_by(QueueEntry.updated_at.desc())
             .limit(100)
         )
     )
+    return [
+        {
+            "entry_id": entry.id,
+            "queue_id": entry.queue_id,
+            "queue_name": entry.queue.name,
+            "queue_prefix": entry.queue.prefix,
+            "queue_number": entry.queue_number,
+            "status": entry.status,
+            "customer": {
+                "id": entry.customer.id,
+                "full_name": entry.customer.full_name,
+                "email": entry.customer.email,
+            },
+            "joined_at": entry.joined_at,
+            "completed_at": entry.completed_at,
+        }
+        for entry in entries
+    ]
 
 
 @router.post("/queues/{queue_id}/pause")

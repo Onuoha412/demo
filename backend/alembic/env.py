@@ -27,12 +27,22 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
+    connect_args = (
+        {"check_same_thread": False, "timeout": 30}
+        if settings.database_url.startswith(("sqlite://", "sqlite+pysqlite://"))
+        else {}
+    )
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        connect_args=connect_args,
     )
     with connectable.connect() as connection:
+        if connection.dialect.name == "sqlite":
+            # SQLite batch migrations rebuild tables that may be referenced by foreign keys.
+            connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+            connection.commit()
         context.configure(connection=connection, target_metadata=target_metadata)
         with context.begin_transaction():
             context.run_migrations()

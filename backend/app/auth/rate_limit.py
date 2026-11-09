@@ -5,7 +5,6 @@ from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
 from ..config import settings
-from ..db.session import begin_write
 from ..models import AuthRateLimit
 
 
@@ -21,7 +20,6 @@ def enforce_rate_limit(
     ).hexdigest()
     bucket_key = f"{scope}:{digest}"
     now = datetime.now(timezone.utc)
-    begin_write(db)
     bucket = db.get(AuthRateLimit, bucket_key)
     if bucket is None:
         bucket = AuthRateLimit(

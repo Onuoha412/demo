@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-describe("tab-scoped bearer session store", () => {
+describe("bearer session store", () => {
   beforeEach(() => {
     localStorage.clear();
     sessionStorage.clear();
@@ -37,11 +37,34 @@ describe("tab-scoped bearer session store", () => {
     expect(useAuthStore.getState().user).toEqual(user);
     expect(useAuthStore.getState().token).toBe("opaque-session-token");
     expect(sessionStorage.getItem("queueless.session")).toBe("opaque-session-token");
+    expect(localStorage.getItem("queueless.remembered")).toBeNull();
     expect(localStorage.getItem("queueless.token")).toBeNull();
     expect(localStorage.getItem("queueless.user")).toBeNull();
     useAuthStore.getState().logout();
     expect(useAuthStore.getState().token).toBeNull();
     expect(sessionStorage.getItem("queueless.session")).toBeNull();
     expect(useAuthStore.getState().ready).toBe(true);
+  });
+
+  it("restores a remembered session across browser visits", async () => {
+    localStorage.setItem("queueless.remembered", "remembered-session-token");
+
+    const { useAuthStore } = await import("../store/authStore");
+
+    expect(useAuthStore.getState().token).toBe("remembered-session-token");
+    useAuthStore.getState().setAuth(
+      {
+        id: "u2",
+        full_name: "Remembered Customer",
+        email: "remembered@example.com",
+        role: "customer",
+        organization_id: null,
+        created_at: new Date().toISOString(),
+      },
+      "remembered-session-token",
+      true,
+    );
+    expect(localStorage.getItem("queueless.remembered")).toBe("remembered-session-token");
+    expect(sessionStorage.getItem("queueless.session")).toBeNull();
   });
 });

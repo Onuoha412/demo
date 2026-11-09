@@ -28,16 +28,20 @@ async function getAdminAnalytics(request: APIRequestContext, token: string) {
   return response.json();
 }
 
-test("customer, staff, public display, and admin stay in sync through service", async ({ page, request, browser }) => {
+test("customer, staff, public display, and admin stay in sync through service", async ({ page, request, browser, browserName }) => {
   test.skip(
     !adminEmail || !adminPassword || process.env.E2E_DATA_DISPOSABLE !== "1",
     "Set staging admin credentials and E2E_DATA_DISPOSABLE=1 for the mutating full-system test.",
+  );
+  test.skip(
+    browserName !== "chromium",
+    "The mutating full-system journey runs once in Chromium; mobile smoke coverage runs in every browser.",
   );
   const adminLogin = await request.post(apiUrl("/api/v1/auth/login"), {
     data: { email: adminEmail, password: adminPassword },
   });
   expect(adminLogin.ok()).toBeTruthy();
-  const adminToken = (await adminLogin.json()).access_token as string;
+  const adminToken = (await adminLogin.json()).session_token as string;
   const suffix = randomUUID().slice(0, 8);
 
   const organization = await postJson(request, "/api/v1/admin/organizations", adminToken, {
@@ -46,9 +50,22 @@ test("customer, staff, public display, and admin stay in sync through service", 
   const branch = await postJson(request, "/api/v1/admin/branches", adminToken, {
     organization_id: organization.id, name: `E2E Branch ${suffix}`,
   });
+  const reassignmentBranch = await postJson(
+    request,
+    "/api/v1/admin/branches",
+    adminToken,
+    { organization_id: organization.id, name: `E2E Reassignment ${suffix}` },
+  );
   const service = await postJson(request, "/api/v1/admin/services", adminToken, {
     branch_id: branch.id, name: `E2E Service ${suffix}`, code: `E${suffix.slice(0, 6)}`,
     average_service_minutes: 5,
+  });
+  const appointmentStart = new Date(Date.now() + 10 * 60_000);
+  await postJson(request, "/api/v1/admin/appointment-slots", adminToken, {
+    service_id: service.id,
+    starts_at: appointmentStart.toISOString(),
+    ends_at: new Date(appointmentStart.getTime() + 30 * 60_000).toISOString(),
+    capacity: 1,
   });
   const counter = await postJson(request, "/api/v1/admin/counters", adminToken, {
     branch_id: branch.id, name: "Counter 2", number: 2, status: "available",
@@ -84,12 +101,23 @@ test("customer, staff, public display, and admin stay in sync through service", 
   await customerPage.goto("/register");
   await customerPage.getByLabel("Full name").fill(`E2E Customer ${suffix}`);
   await customerPage.getByLabel("Email").fill(suffixCustomer);
-  await customerPage.getByLabel("Password").fill(customerPassword);
+  await customerPage.locator("#register-password").fill(customerPassword);
+  await customerPage.locator("#register-confirm-password").fill(customerPassword);
   await customerPage.getByRole("button", { name: "Create account" }).click();
   await expect(customerPage).toHaveURL(/\/services$/);
   await expect(
     customerPage.getByRole("heading", { name: "Available services" }),
   ).toBeVisible();
+  await customerPage.goto(`/services/${service.id}/appointments`);
+  await expect(
+    customerPage.getByRole("heading", { name: "Book an appointment" }),
+  ).toBeVisible();
+  await customerPage.getByRole("button", { name: "Book this time" }).click();
+  await expect(customerPage.getByText(/booked/)).toBeVisible();
+  await customerPage.goto("/appointments");
+  await customerPage.getByRole("button", { name: "Check in" }).click();
+  await expect(customerPage.getByText(/checked in/)).toBeVisible();
+
   await customerPage.goto(`/services/${service.id}`);
   await expect(customerPage.getByRole("img", { name: "QueueLess service QR code" })).toBeVisible();
   await customerPage.getByRole("link", { name: "Open join link" }).click();
@@ -110,11 +138,11 @@ test("customer, staff, public display, and admin stay in sync through service", 
       },
     });
     expect(registration.status()).toBe(201);
-    const accessToken = (await registration.json()).access_token as string;
+    const sessionToken = (await registration.json()).session_token as string;
     await postJson(
       request,
       `/api/v1/customers/services/${service.id}/join?branch_id=${branch.id}`,
-      accessToken,
+      sessionToken,
       {},
     );
   }
@@ -162,6 +190,24 @@ test("customer, staff, public display, and admin stay in sync through service", 
   await expect(page.getByText("Completed today", { exact: true }).locator("..").locator("p").nth(1))
     .toHaveText(String(servedBefore + 1));
   expect(analytics.customers_served_today).toBe(servedBefore + 1);
+  const reassigned = await request.patch(
+    apiUrl(`/api/v1/admin/users/${staff.id}`),
+    {
+      headers: { Authorization: `Bearer ${adminToken}` },
+      data: { branch_id: reassignmentBranch.id },
+    },
+  );
+  expect(reassigned.ok()).toBeTruthy();
+  expect((await reassigned.json()).branch_id).toBe(reassignmentBranch.id);
+  const restored = await request.patch(
+    apiUrl(`/api/v1/admin/users/${staff.id}`),
+    {
+      headers: { Authorization: `Bearer ${adminToken}` },
+      data: { branch_id: branch.id },
+    },
+  );
+  expect(restored.ok()).toBeTruthy();
+  expect((await restored.json()).branch_id).toBe(branch.id);
   await customerQueuePage.goto("/notifications");
   await expect(customerQueuePage.getByText("You joined the queue")).toBeVisible();
   await expect(customerQueuePage.getByText("Your turn is now")).toBeVisible();

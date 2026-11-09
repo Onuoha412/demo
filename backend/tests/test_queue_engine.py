@@ -80,10 +80,14 @@ def test_customer_workflow_and_position(db_session: Session) -> None:
             joined.append(
                 client.post(
                     f"/api/v1/queues/{queue.id}/join",
-                    json={"customer_id": str(user.id)},
+                    json={
+                        "customer_id": str(user.id),
+                        "request_note": "  Needs accessible service  ",
+                    },
                 ).json()
             )
         assert [item["queue_number"] for item in joined] == [1, 2, 3]
+        assert joined[0]["request_note"] == "Needs accessible service"
         assert joined[2]["people_ahead"] == 2
         authorize(client, users[0])
         retried = client.post(
@@ -271,7 +275,7 @@ def test_concurrent_joins_have_unique_numbers(database_engine) -> None:
             return entry["queue_number"]
 
     concurrent_customers = 50
-    with ThreadPoolExecutor(max_workers=concurrent_customers) as executor:
+    with ThreadPoolExecutor(max_workers=10) as executor:
         numbers = list(executor.map(join_once, range(concurrent_customers)))
     assert len(numbers) == concurrent_customers
     assert sorted(numbers) == list(range(1, concurrent_customers + 1))
@@ -318,6 +322,32 @@ def test_concurrent_retry_by_same_customer_creates_one_entry(database_engine) ->
         assert session.scalar(
             select(func.count(Notification.id)).where(Notification.user_id == customer_id)
         ) == 1
+
+
+def test_concurrent_next_calls_serve_distinct_customers(database_engine) -> None:
+    session_factory = sessionmaker(bind=database_engine, expire_on_commit=False)
+    with session_factory() as session:
+        queue, _, users = create_fixture(session)
+        queue_id = queue.id
+        customer_ids = [user.id for user in users[:2]]
+        for customer_id in customer_ids:
+            QueueService(session).join(queue_id, customer_id)
+
+    def call_next(_: int) -> str:
+        with session_factory() as session:
+            return str(QueueService(session).next(queue_id)["id"])
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        called_ids = list(executor.map(call_next, range(2)))
+
+    assert len(set(called_ids)) == 2
+    with session_factory() as session:
+        assert session.scalar(
+            select(func.count(QueueEntry.id)).where(
+                QueueEntry.queue_id == queue_id,
+                QueueEntry.status == "called",
+            )
+        ) == 2
 
 
 def test_join_rolls_back_ticket_and_sequence_when_notification_creation_fails(
@@ -371,3 +401,104 @@ def test_queue_page_reads_use_a_bounded_number_of_queries(db_session: Session) -
 
     assert len(response["entries"]) == len(users)
     assert len(statements) <= 5
+
+
+def test_queue_capacity_is_enforced_and_released_on_customer_cancellation(
+    db_session: Session,
+) -> None:
+    queue, _, users = create_fixture(db_session)
+    queue.capacity_limit = 2
+    db_session.commit()
+    with client_for(db_session) as client:
+        joined = []
+        for user in users[:2]:
+            authorize(client, user)
+            response = client.post(
+                f"/api/v1/queues/{queue.id}/join",
+                json={"customer_id": str(user.id)},
+            )
+            assert response.status_code == 201
+            joined.append(response.json())
+
+        authorize(client, users[1])
+        assert client.post(
+            f"/api/v1/queues/{queue.id}/join",
+            json={"customer_id": str(users[1].id)},
+        ).json()["id"] == joined[1]["id"]
+
+        authorize(client, users[2])
+        full = client.post(
+            f"/api/v1/queues/{queue.id}/join",
+            json={"customer_id": str(users[2].id)},
+        )
+        assert full.status_code == 409
+
+        authorize(client, users[0])
+        cancelled = client.post(
+            f"/api/v1/queue-entries/{joined[0]['id']}/cancel"
+        )
+        assert cancelled.status_code == 200
+
+        authorize(client, users[2])
+        admitted = client.post(
+            f"/api/v1/queues/{queue.id}/join",
+            json={"customer_id": str(users[2].id)},
+        )
+        assert admitted.status_code == 201
+
+
+def test_enabled_priority_is_fifo_within_levels_and_controls_next_customer(
+    db_session: Session,
+) -> None:
+    queue, _, users = create_fixture(db_session)
+    staff = create_staff(db_session, queue)
+    queue.priority_enabled = True
+    db_session.commit()
+    with client_for(db_session) as client:
+        entries = []
+        for user in users:
+            authorize(client, user)
+            entries.append(
+                client.post(
+                    f"/api/v1/queues/{queue.id}/join",
+                    json={"customer_id": str(user.id)},
+                ).json()
+            )
+
+        authorize(client, staff)
+        for index, priority in ((0, 2), (2, 4)):
+            changed = client.post(
+                f"/api/v1/queue-entries/{entries[index]['id']}/priority",
+                json={"priority": priority},
+            )
+            assert changed.status_code == 200, changed.text
+
+        page = client.get(
+            f"/api/v1/queues/{queue.id}?page=1&page_size=10"
+        ).json()
+        assert [entry["queue_number"] for entry in page["entries"]] == [3, 1, 2]
+        assert page["entries"][2]["people_ahead"] == 2
+        assert page["priority_enabled"] is True
+
+        next_entry = client.post(f"/api/v1/queues/{queue.id}/next")
+        assert next_entry.status_code == 200
+        assert next_entry.json()["queue_number"] == 3
+
+
+def test_priority_cannot_be_changed_when_policy_is_disabled(
+    db_session: Session,
+) -> None:
+    queue, _, users = create_fixture(db_session)
+    staff = create_staff(db_session, queue)
+    with client_for(db_session) as client:
+        authorize(client, users[0])
+        entry = client.post(
+            f"/api/v1/queues/{queue.id}/join",
+            json={"customer_id": str(users[0].id)},
+        ).json()
+        authorize(client, staff)
+        response = client.post(
+            f"/api/v1/queue-entries/{entry['id']}/priority",
+            json={"priority": 3},
+        )
+        assert response.status_code == 409

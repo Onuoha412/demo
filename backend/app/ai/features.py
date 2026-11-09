@@ -38,7 +38,7 @@ def _duration_minutes(entry: QueueEntry) -> float | None:
 
 
 class WaitTimeFeatureExtractor:
-    """Build features from SQLite queue and historical completion records."""
+    """Build features from queue and historical completion records."""
 
     def __init__(self, history_limit: int = 200) -> None:
         self.history_limit = max(1, history_limit)

@@ -12,7 +12,14 @@ export function DisplayPage() {
   const query = useQuery({ queryKey: ["public-queue", queueId], queryFn: () => getQueue(queueId), enabled: !!queueId });
   const connection = useQueueWebSocket(queueId);
   if (query.isLoading) return <LoadingState />;
-  if (query.isError || !query.data) return <ErrorState message="Unable to load this queue display." />;
+  if (query.isError || !query.data) {
+    return (
+      <ErrorState
+        message="Unable to load this queue display."
+        onRetry={() => void query.refetch()}
+      />
+    );
+  }
   const active = query.data.entries.filter((entry) => entry.status === "called" || entry.status === "serving");
   const waiting = query.data.entries.filter((entry) => entry.status === "waiting").slice(0, 5);
   return <PageContainer className="py-10"><div className="flex items-center justify-between"><div><p className="text-sm uppercase tracking-widest text-emerald-800">QueueLess</p><h1 className="text-5xl font-black">{query.data.name}</h1></div><span className="rounded-full bg-ink px-4 py-2 text-sm text-white">{connection.status}</span></div>

@@ -1,4 +1,8 @@
-import { apiRequest, resolveApiBaseUrl } from "../services/api";
+import {
+  apiRequest,
+  resolveApiBaseUrl,
+  resolveWebSocketBaseUrl,
+} from "../services/api";
 import { login } from "../services/auth";
 import { getQueueEntry, getServices, joinService } from "../services/queue";
 import { verifyAdminQueueEntry } from "../services/admin";
@@ -68,6 +72,31 @@ it("uses the local backend for production previews served on localhost", () => {
   );
   expect(resolveApiBaseUrl(undefined, true, "localhost")).toBe("");
   expect(resolveApiBaseUrl(undefined, false, "queueless.example.com")).toBe("");
+});
+
+it("resolves realtime sockets from explicit, API, or same-origin deployment URLs", () => {
+  expect(
+    resolveWebSocketBaseUrl(
+      "wss://socket.example.com/",
+      "https://api.example.com",
+      "https:",
+      "app.example.com",
+    ),
+  ).toBe("wss://socket.example.com");
+  expect(
+    resolveWebSocketBaseUrl(
+      undefined,
+      "https://api.example.com/",
+      "https:",
+      "app.example.com",
+    ),
+  ).toBe("wss://api.example.com");
+  expect(
+    resolveWebSocketBaseUrl(undefined, "", "https:", "app.example.com"),
+  ).toBe("wss://app.example.com");
+  expect(
+    resolveWebSocketBaseUrl(undefined, "", "http:", "localhost:5173"),
+  ).toBe("ws://localhost:5173");
 });
 
 it("does not send a JSON content type on public GET requests", async () => {
@@ -142,10 +171,12 @@ it("customer can join queue", async () => {
       201,
     ),
   );
-  const entry = await joinService("svc-1", "branch-1", "  Need assistance  ");
+  const entry = await joinService("svc-1", "branch-1", "  Need assistance  ", "queue-1");
   expect(entry.queue_number).toBe(10);
   expect(fetch).toHaveBeenCalledWith(
-    expect.stringContaining("/customers/services/svc-1/join"),
+    expect.stringContaining(
+      "/customers/services/svc-1/join?branch_id=branch-1&queue_id=queue-1",
+    ),
     expect.objectContaining({
       credentials: "omit",
       body: JSON.stringify({ request_note: "Need assistance" }),

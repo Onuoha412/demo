@@ -1,4 +1,4 @@
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from ..models import Counter, Queue, QueueEntry, Service
@@ -18,11 +18,20 @@ class QueuePositionService:
         ) or 0
 
     def people_ahead(self, session: Session, entry: QueueEntry) -> int:
+        ahead_condition = QueueEntry.queue_number < entry.queue_number
+        if entry.queue.priority_enabled:
+            ahead_condition = or_(
+                QueueEntry.priority > entry.priority,
+                and_(
+                    QueueEntry.priority == entry.priority,
+                    QueueEntry.queue_number < entry.queue_number,
+                ),
+            )
         return session.scalar(
             select(func.count(QueueEntry.id)).where(
                 QueueEntry.queue_id == entry.queue_id,
                 QueueEntry.status == QueueEntryStatus.WAITING,
-                QueueEntry.queue_number < entry.queue_number,
+                ahead_condition,
             )
         ) or 0
 

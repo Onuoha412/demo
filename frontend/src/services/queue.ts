@@ -47,9 +47,13 @@ export async function joinService(
   serviceId: string,
   branchId?: string,
   requestNote?: string,
+  queueId?: string,
 ): Promise<QueuePosition> {
   try {
-    const query = branchId ? `?branch_id=${encodeURIComponent(branchId)}` : "";
+    const params = new URLSearchParams();
+    if (branchId) params.set("branch_id", branchId);
+    if (queueId) params.set("queue_id", queueId);
+    const query = params.size ? `?${params.toString()}` : "";
     const result = await apiRequest<QueuePosition>(
       `/api/v1/customers/services/${encodeURIComponent(serviceId)}/join${query}`,
       {

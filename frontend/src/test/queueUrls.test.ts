@@ -12,6 +12,20 @@ describe("serviceJoinUrl", () => {
       .toBe("https://queueless.example/join/branch-456/service-123");
   });
 
+  it("builds a queue-specific QR URL", () => {
+    expect(
+      serviceJoinUrl(
+        "service-123",
+        "branch-456",
+        "https://queueless.example",
+        "/",
+        "queue-789",
+      ),
+    ).toBe(
+      "https://queueless.example/join/branch-456/service-123?queue_id=queue-789",
+    );
+  });
+
   it("keeps a deployment base path in the scannable URL", () => {
     expect(
       serviceJoinUrl("service-123", "branch-456", "https://queueless.example", "/app/"),

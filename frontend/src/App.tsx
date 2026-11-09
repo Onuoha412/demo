@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
 
 import { Navbar } from "./components/common/Navbar";
+import { FeedbackEntryPoint } from "./components/common/FeedbackEntryPoint";
 import { LoadingState } from "./components/common/LoadingState";
 import { ProtectedRoute } from "./components/common/ProtectedRoute";
 import { HomePage } from "./pages/customer/HomePage";
@@ -29,6 +30,21 @@ const ResetPasswordPage = lazy(() =>
 );
 const ServicesPage = lazy(() =>
   import("./pages/customer/ServicesPage").then((module) => ({ default: module.ServicesPage })),
+);
+const ScanQRCodePage = lazy(() =>
+  import("./pages/customer/ScanQRCodePage").then((module) => ({
+    default: module.ScanQRCodePage,
+  })),
+);
+const AppointmentsPage = lazy(() =>
+  import("./pages/customer/AppointmentsPage").then((module) => ({
+    default: module.AppointmentsPage,
+  })),
+);
+const AppointmentSlotsPage = lazy(() =>
+  import("./pages/admin/AppointmentSlotsPage").then((module) => ({
+    default: module.AppointmentSlotsPage,
+  })),
 );
 const ServiceDetailPage = lazy(() =>
   import("./pages/customer/ServiceDetailPage").then((module) => ({
@@ -69,6 +85,26 @@ const AdminLoginPage = lazy(() =>
     default: module.AdminLoginPage,
   })),
 );
+const SuperAdminLoginPage = lazy(() =>
+  import("./pages/admin/SuperAdminLoginPage").then((module) => ({
+    default: module.SuperAdminLoginPage,
+  })),
+);
+const SuperAdminDashboardPage = lazy(() =>
+  import("./pages/admin/SuperAdminDashboardPage").then((module) => ({
+    default: module.SuperAdminDashboardPage,
+  })),
+);
+const SuperAdminAuditPage = lazy(() =>
+  import("./pages/admin/SuperAdminAuditPage").then((module) => ({
+    default: module.SuperAdminAuditPage,
+  })),
+);
+const SuperAdminOperationsPage = lazy(() =>
+  import("./pages/admin/SuperAdminOperationsPage").then((module) => ({
+    default: module.SuperAdminOperationsPage,
+  })),
+);
 const AdminResourcePage = lazy(() =>
   import("./pages/admin/AdminResourcePage").then((module) => ({
     default: module.AdminResourcePage,
@@ -79,6 +115,16 @@ const AdminDashboardPage = lazy(() =>
     default: module.AdminDashboardPage,
   })),
 );
+const OrganizationAnnouncementsPage = lazy(() =>
+  import("./pages/admin/OrganizationAnnouncementsPage").then((module) => ({
+    default: module.OrganizationAnnouncementsPage,
+  })),
+);
+const MigrationCenterPage = lazy(() =>
+  import("./pages/admin/MigrationCenterPage").then((module) => ({
+    default: module.MigrationCenterPage,
+  })),
+);
 const AdminQueuePage = lazy(() =>
   import("./pages/admin/AdminQueuePage").then((module) => ({
     default: module.AdminQueuePage,
@@ -86,6 +132,11 @@ const AdminQueuePage = lazy(() =>
 );
 const DisplayPage = lazy(() =>
   import("./pages/display/DisplayPage").then((module) => ({ default: module.DisplayPage })),
+);
+const FeedbackCenterPage = lazy(() =>
+  import("./pages/FeedbackCenterPage").then((module) => ({
+    default: module.FeedbackCenterPage,
+  })),
 );
 
 function RoleHomeRoute() {
@@ -112,7 +163,10 @@ function AuthSessionBootstrap() {
     let active = true;
     void me(token)
       .then((user) => {
-        if (active) setAuth(user, token);
+      const remembered =
+        typeof localStorage !== "undefined" &&
+        localStorage.getItem("queueless.remembered") === token;
+      if (active) setAuth(user, token, remembered);
       })
       .catch((error: unknown) => {
         if (!active) return;
@@ -149,6 +203,7 @@ export default function App() {
       <SessionDataIsolation />
       <div className="min-h-screen bg-cream text-ink">
         <Navbar />
+        <FeedbackEntryPoint />
         <Suspense fallback={<LoadingState label="Loading page..." />}>
           <Routes>
             <Route path="/" element={<RoleHomeRoute />} />
@@ -157,7 +212,24 @@ export default function App() {
             <Route path="/forgot-password" element={<ForgotPasswordPage />} />
             <Route path="/reset-password" element={<ResetPasswordPage />} />
             <Route path="/services" element={<ServicesPage />} />
+            <Route path="/scan" element={<ScanQRCodePage />} />
             <Route path="/services/:serviceId" element={<ServiceDetailPage />} />
+            <Route
+              path="/services/:serviceId/appointments"
+              element={
+                <ProtectedRoute allowedRoles={["customer"]}>
+                  <AppointmentsPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/appointments"
+              element={
+                <ProtectedRoute allowedRoles={["customer"]}>
+                  <AppointmentsPage />
+                </ProtectedRoute>
+              }
+            />
             <Route
               path="/join/:serviceId"
               element={
@@ -186,22 +258,59 @@ export default function App() {
             <Route
               path="/profile"
               element={
-                <ProtectedRoute allowedRoles={["customer"]}>
+                <ProtectedRoute allowedRoles={["customer", "staff", "admin", "super_admin"]}>
                   <ProfilePage />
                 </ProtectedRoute>
               }
             />
             <Route path="/notifications" element={<ProtectedRoute allowedRoles={["customer"]}><NotificationsPage /></ProtectedRoute>} />
+            <Route
+              path="/feedback/history"
+              element={
+                <ProtectedRoute allowedRoles={["customer", "staff", "admin", "super_admin"]}>
+                  <FeedbackCenterPage />
+                </ProtectedRoute>
+              }
+            />
             <Route path="/staff/login" element={<StaffLoginPage />} />
+            <Route path="/staff/forgot-password" element={<ForgotPasswordPage loginPath="/staff/login" />} />
             <Route path="/staff/dashboard" element={<ProtectedRoute allowedRoles={["staff"]}><StaffDashboardPage /></ProtectedRoute>} />
             <Route path="/staff/queue" element={<ProtectedRoute allowedRoles={["staff"]}><StaffDashboardPage /></ProtectedRoute>} />
             <Route path="/staff/customers" element={<ProtectedRoute allowedRoles={["staff"]}><StaffDashboardPage /></ProtectedRoute>} />
             <Route path="/staff/history" element={<ProtectedRoute allowedRoles={["staff"]}><StaffDashboardPage /></ProtectedRoute>} />
             <Route path="/admin/login" element={<AdminLoginPage />} />
+            <Route path="/admin/forgot-password" element={<ForgotPasswordPage loginPath="/admin/login" />} />
             <Route path="/admin/dashboard" element={<ProtectedRoute allowedRoles={["admin"]}><AdminDashboardPage /></ProtectedRoute>} />
+            <Route path="/admin/announcements" element={<ProtectedRoute allowedRoles={["admin"]}><OrganizationAnnouncementsPage /></ProtectedRoute>} />
+            <Route path="/admin/migrations" element={<ProtectedRoute allowedRoles={["admin", "super_admin"]}><MigrationCenterPage /></ProtectedRoute>} />
             <Route path="/admin/queues/:queueId/entries" element={<ProtectedRoute allowedRoles={["admin"]}><AdminQueuePage /></ProtectedRoute>} />
             <Route path="/admin/:resource" element={<ProtectedRoute allowedRoles={["admin"]}><AdminResourcePage /></ProtectedRoute>} />
+            <Route
+              path="/admin/services/:serviceId/appointments"
+              element={
+                <ProtectedRoute allowedRoles={["admin"]}>
+                  <AppointmentSlotsPage />
+                </ProtectedRoute>
+              }
+            />
             <Route path="/admin/analytics" element={<ProtectedRoute allowedRoles={["admin"]}><AdminDashboardPage /></ProtectedRoute>} />
+            <Route path="/admin/feedback" element={<ProtectedRoute allowedRoles={["admin"]}><FeedbackCenterPage /></ProtectedRoute>} />
+            <Route path="/super-admin/login" element={<SuperAdminLoginPage />} />
+            <Route path="/super-admin/forgot-password" element={<ForgotPasswordPage loginPath="/super-admin/login" />} />
+            <Route path="/super-admin/dashboard" element={<ProtectedRoute allowedRoles={["super_admin"]}><SuperAdminDashboardPage /></ProtectedRoute>} />
+            <Route path="/super-admin/audit-logs" element={<ProtectedRoute allowedRoles={["super_admin"]}><SuperAdminAuditPage /></ProtectedRoute>} />
+            <Route path="/super-admin/operations" element={<ProtectedRoute allowedRoles={["super_admin"]}><SuperAdminOperationsPage /></ProtectedRoute>} />
+            <Route path="/super-admin/feedback" element={<ProtectedRoute allowedRoles={["super_admin"]}><FeedbackCenterPage /></ProtectedRoute>} />
+            <Route path="/super-admin/queues/:queueId/entries" element={<ProtectedRoute allowedRoles={["super_admin"]}><AdminQueuePage /></ProtectedRoute>} />
+            <Route path="/super-admin/:resource" element={<ProtectedRoute allowedRoles={["super_admin"]}><AdminResourcePage /></ProtectedRoute>} />
+            <Route
+              path="/super-admin/services/:serviceId/appointments"
+              element={
+                <ProtectedRoute allowedRoles={["super_admin"]}>
+                  <AppointmentSlotsPage />
+                </ProtectedRoute>
+              }
+            />
             <Route path="/display/:queueId" element={<DisplayPage />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>

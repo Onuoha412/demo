@@ -22,6 +22,28 @@ export const API_BASE = resolveApiBaseUrl(
   typeof window === "undefined" ? undefined : window.location.hostname,
 );
 
+export function resolveWebSocketBaseUrl(
+  configuredUrl: string | undefined,
+  apiBaseUrl: string,
+  protocol: string | undefined,
+  host: string | undefined,
+): string {
+  const configured = configuredUrl?.trim().replace(/\/+$/, "");
+  if (configured) return configured;
+  if (apiBaseUrl) return apiBaseUrl.replace(/^http/, "ws").replace(/\/+$/, "");
+  if (protocol && host) {
+    return `${protocol === "https:" ? "wss" : "ws"}://${host}`;
+  }
+  return "";
+}
+
+export const WS_BASE = resolveWebSocketBaseUrl(
+  import.meta.env.VITE_WS_URL,
+  API_BASE,
+  typeof window === "undefined" ? undefined : window.location.protocol,
+  typeof window === "undefined" ? undefined : window.location.host,
+);
+
 function formatApiError(status: number, body: string): string {
   let payload: unknown;
   try {
@@ -82,7 +104,11 @@ export async function apiRequest<T>(
   const token = sessionToken ?? useAuthStore.getState().token;
   let response: Response;
   const headers = new Headers(options.headers);
-  if (options.body !== undefined && !headers.has("Content-Type")) {
+  if (
+    options.body !== undefined &&
+    !(options.body instanceof FormData) &&
+    !headers.has("Content-Type")
+  ) {
     headers.set("Content-Type", "application/json");
   }
   if (token && !headers.has("Authorization")) {
@@ -123,4 +149,38 @@ export async function apiRequest<T>(
       "The QueueLess backend returned an invalid response. Check that the API URL points to the backend, not the frontend.",
     );
   }
+}
+
+export async function apiDownload(
+  path: string,
+  sessionToken?: string,
+): Promise<Blob> {
+  const token = sessionToken ?? useAuthStore.getState().token;
+  const headers = new Headers();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      credentials: "omit",
+      headers,
+    });
+  } catch {
+    captureApiFailure(0, path);
+    throw new ApiError(
+      0,
+      `Cannot reach the QueueLess API${API_BASE ? ` at ${API_BASE}` : ""}. Check that the backend is running and the API URL is configured.`,
+    );
+  }
+
+  if (!response.ok) {
+    captureApiFailure(response.status, path);
+    if (response.status === 401) useAuthStore.getState().logout();
+    throw new ApiError(
+      response.status,
+      formatApiError(response.status, await response.text()),
+    );
+  }
+
+  return response.blob();
 }

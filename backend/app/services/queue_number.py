@@ -1,4 +1,4 @@
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from ..models import Queue
@@ -8,16 +8,17 @@ class QueueNumberService:
     """Allocates queue numbers while holding a row-level lock on the queue."""
 
     def next_number(self, session: Session, queue: Queue) -> int:
-        locked_queue = session.scalar(
-            select(Queue)
+        next_number = session.execute(
+            update(Queue)
             .where(Queue.id == queue.id)
-            .with_for_update(of=Queue)
+            .values(current_number=Queue.current_number + 1)
+            .returning(Queue.current_number)
         )
-        if locked_queue is None:
+        current_number = next_number.scalar_one_or_none()
+        if current_number is None:
             raise ValueError("Queue not found")
-        locked_queue.current_number += 1
         session.flush()
-        return locked_queue.current_number
+        return current_number
 
     @staticmethod
     def reset_policy() -> str:

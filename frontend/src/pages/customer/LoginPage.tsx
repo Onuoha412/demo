@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useState } from "react";
 import type { FormEvent } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
@@ -7,7 +7,6 @@ import { login, logoutSession } from "../../services/auth";
 import { useAuthStore } from "../../store/authStore";
 import { ApiError } from "../../services/api";
 import { AuthLayout } from "../../components/auth/AuthLayout";
-import { GoogleSignInButton } from "../../components/auth/GoogleSignInButton";
 
 export function LoginPage() {
   const navigate = useNavigate();
@@ -17,24 +16,9 @@ export function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [rememberDevice, setRememberDevice] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [loginError, setLoginError] = useState<string | null>(null);
-
-  const handleGoogleAuthenticated = useCallback((result: Awaited<ReturnType<typeof login>>) => {
-    if (result.user.role !== "customer") {
-      setLoginError("Use the staff or administrator sign-in for this account.");
-      void logoutSession(result.session_token).catch((error: unknown) =>
-        console.error("Unable to revoke an unsupported session.", error),
-      );
-      return;
-    }
-    setAuth(result.user, result.session_token);
-    const redirectTarget =
-      (location.state as { from?: string } | null)?.from ??
-      searchParams.get("next") ??
-      "/";
-    navigate(redirectTarget, { replace: true });
-  }, [location.state, navigate, searchParams, setAuth]);
 
   const mutation = useMutation({
     mutationFn: login,
@@ -44,7 +28,7 @@ export function LoginPage() {
         void logoutSession(result.session_token).catch((error: unknown) => console.error("Unable to revoke an unsupported session.", error));
         return;
       }
-      setAuth(result.user, result.session_token);
+      setAuth(result.user, result.session_token, rememberDevice);
       const redirectTarget = (location.state as { from?: string } | null)?.from ?? searchParams.get("next") ?? "/";
       navigate(redirectTarget, { replace: true });
     },
@@ -105,13 +89,22 @@ export function LoginPage() {
         </label>
 
         <div className="flex items-center justify-between gap-3 text-sm">
+          <label className="inline-flex items-center gap-2 text-slate-600">
+            <input
+              checked={rememberDevice}
+              className="h-4 w-4 rounded border-slate-300 text-emerald-700 focus:ring-emerald-500"
+              onChange={(event) => setRememberDevice(event.target.checked)}
+              type="checkbox"
+            />
+            Keep me signed in
+          </label>
           <Link to="/forgot-password" className="font-semibold text-emerald-700 transition hover:text-emerald-800">
             Forgot password?
           </Link>
         </div>
 
         {validationError && <p className="text-sm text-red-600">{validationError}</p>}
-        {loginError && <p className="text-sm text-red-600">{loginError}</p>}
+        {loginError && <p role="alert" className="text-sm text-red-600">{loginError}</p>}
         {mutation.error instanceof ApiError && (
           <p className="text-sm text-red-600">{mutation.error.detail}</p>
         )}
@@ -126,8 +119,6 @@ export function LoginPage() {
         <span>or</span>
         <span className="h-px flex-1 bg-slate-200" />
       </div>
-
-      <GoogleSignInButton onAuthenticated={handleGoogleAuthenticated} />
 
       <p className="mt-6 text-sm text-slate-600">
         No account yet?{" "}

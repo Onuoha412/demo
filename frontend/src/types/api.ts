@@ -2,7 +2,7 @@ export type User = {
   id: string;
   full_name: string;
   email: string;
-  role: "customer" | "staff" | "admin";
+  role: "customer" | "staff" | "admin" | "super_admin";
   organization_id: string | null;
   branch_id?: string | null;
   created_at: string;
@@ -18,6 +18,8 @@ export type StaffQueueSummary = {
   serving_count: number;
   completed_count: number;
   skipped_count: number;
+  capacity_limit?: number | null;
+  priority_enabled?: boolean;
 };
 export type StaffDashboard = {
   branch: { id: string; name: string } | null;
@@ -68,6 +70,7 @@ export type QueuePosition = {
   queue_id?: string;
   queue_prefix: string;
   queue_number: number;
+  priority?: number;
   status: QueueEntryStatus;
   people_ahead: number;
   estimated_wait_minutes: number;
@@ -80,6 +83,7 @@ export type QueuePosition = {
   request_note?: string | null;
   verified_at?: string | null;
   verified_by_user_id?: string | null;
+  transferred_to_entry_id?: string | null;
 };
 
 export type WaitTimePrediction = {
@@ -121,6 +125,8 @@ export type QueueHistoryResponse = {
 export type AdminAnalytics = {
   customers_served_today: number;
   customers_waiting: number;
+  completed_entries: number;
+  waiting_entries: number;
   average_waiting_time: number;
   average_service_time: number;
   completion_rate: number;

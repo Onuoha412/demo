@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -72,12 +73,16 @@ class QueueCreate(BaseModel):
     name: str = Field(min_length=1, max_length=160)
     prefix: str = Field(min_length=1, max_length=10)
     status: QueueStatus = QueueStatus.OPEN
+    capacity_limit: int | None = Field(default=None, ge=1, le=100_000)
+    priority_enabled: bool = False
 
 
 class QueueUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=160)
     prefix: str | None = Field(default=None, min_length=1, max_length=10)
     status: QueueStatus | None = None
+    capacity_limit: int | None = Field(default=None, ge=1, le=100_000)
+    priority_enabled: bool | None = None
 
 
 class QueueStatusUpdate(BaseModel):
@@ -103,6 +108,8 @@ class AdminQueueAuditResponse(BaseModel):
     prefix: str
     status: QueueStatus
     current_number: int
+    capacity_limit: int | None = None
+    priority_enabled: bool = False
     average_service_minutes: int
     active_counters: int
     total_entries: int
@@ -165,6 +172,9 @@ class AdminUserResponse(BaseModel):
     organization_id: UUID | None
     branch_id: UUID | None
     is_active: bool
+    approval_pending: bool
+    auth_provider: str
+    last_login_at: datetime | None
     created_at: datetime
     updated_at: datetime
 
@@ -205,3 +215,37 @@ class AnalyticsResponse(BaseModel):
     cancellation_rate: float = 0
     busiest_service: dict | None = None
     busiest_hour: dict | None = None
+
+
+class MigrationRowResponse(BaseModel):
+    row_number: int
+    external_id: str | None
+    status: Literal["valid", "invalid", "skipped", "created", "rejected"]
+    errors: list[str] = Field(default_factory=list)
+
+
+class MigrationJobResponse(BaseModel):
+    id: UUID
+    organization_id: UUID
+    source_system: str
+    file_sha256: str
+    status: Literal["preview", "completed", "failed"]
+    total_rows: int
+    valid_rows: int
+    invalid_rows: int
+    created_rows: int
+    skipped_rows: int
+    rejected_rows: int
+    preview_rows: list[MigrationRowResponse]
+    result_rows: list[MigrationRowResponse]
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class MigrationJobPageResponse(BaseModel):
+    items: list[MigrationJobResponse]
+    total: int
+    page: int
+    page_size: int

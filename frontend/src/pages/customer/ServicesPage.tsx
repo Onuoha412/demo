@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useSearchParams } from "react-router-dom";
 
 import { EmptyState } from "../../components/common/EmptyState";
 import { ErrorState } from "../../components/common/ErrorState";
@@ -9,8 +10,14 @@ import { ServiceCard } from "../../components/customer/ServiceCard";
 import { getBranches, getOrganizations, getServices } from "../../services/queue";
 
 export function ServicesPage() {
-  const [organizationId, setOrganizationId] = useState("");
-  const [branchId, setBranchId] = useState("");
+  const [searchParams] = useSearchParams();
+  const [organizationId, setOrganizationId] = useState(
+    () => searchParams.get("organization_id") ?? "",
+  );
+  const [branchId, setBranchId] = useState(
+    () => searchParams.get("branch_id") ?? "",
+  );
+  const [searchTerm, setSearchTerm] = useState("");
 
   const organizations = useQuery({ queryKey: ["organizations"], queryFn: getOrganizations });
   const branches = useQuery({
@@ -26,10 +33,28 @@ export function ServicesPage() {
     () => branches.data ?? [],
     [branches.data],
   );
+  const visibleServices = useMemo(() => {
+    const normalizedSearch = searchTerm.trim().toLowerCase();
+    return (services.data ?? []).filter((service) =>
+      [service.name, service.code, service.description ?? ""].some((value) =>
+        value.toLowerCase().includes(normalizedSearch),
+      ),
+    );
+  }, [searchTerm, services.data]);
 
   return (
     <PageContainer className="py-10">
       <h1 className="text-4xl font-black text-ink">Available services</h1>
+      <label className="mt-6 block text-sm font-semibold text-ink">
+        Search services
+        <input
+          className="mt-1 w-full rounded-lg border border-ink/20 px-3 py-2"
+          onChange={(event) => setSearchTerm(event.target.value)}
+          placeholder="Search by service name, code, or description"
+          type="search"
+          value={searchTerm}
+        />
+      </label>
       <div className="mt-6 grid gap-3 sm:grid-cols-2">
         <label className="text-sm font-semibold text-ink">
           Organization
@@ -71,11 +96,18 @@ export function ServicesPage() {
         {services.error instanceof Error && (
           <ErrorState message={services.error.message} onRetry={() => services.refetch()} />
         )}
-        {services.data && services.data.length === 0 && (
-          <EmptyState title="No services found" message="Try another organization or branch." />
+        {services.data && visibleServices.length === 0 && (
+          <EmptyState
+            title={services.data.length === 0 ? "No services found" : "No matching services"}
+            message={
+              services.data.length === 0
+                ? "Try another organization or branch."
+                : "Try a different search term."
+            }
+          />
         )}
         <div className="grid gap-4 md:grid-cols-2">
-          {(services.data ?? []).map((service) => (
+          {visibleServices.map((service) => (
             <ServiceCard key={service.id} service={service} />
           ))}
         </div>

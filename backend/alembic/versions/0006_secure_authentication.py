@@ -161,15 +161,18 @@ def downgrade() -> None:
             op.drop_index("ix_sessions_user_expires", table_name="sessions")
         op.drop_table("sessions")
     user_columns = {column["name"] for column in inspector.get_columns("users")}
+    google_id_constraints = [
+        constraint
+        for constraint in inspector.get_unique_constraints("users")
+        if constraint.get("column_names") == ["google_id"]
+    ]
     with op.batch_alter_table(
         "users",
         naming_convention={"uq": "uq_%(table_name)s_%(column_0_name)s"},
     ) as batch_op:
-        if any(
-            constraint.get("column_names") == ["google_id"]
-            for constraint in inspector.get_unique_constraints("users")
-        ):
-            batch_op.drop_constraint("uq_users_google_id", type_="unique")
+        for constraint in google_id_constraints:
+            if constraint.get("name"):
+                batch_op.drop_constraint(constraint["name"], type_="unique")
         for name in (
             "last_login_at",
             "email_verified",

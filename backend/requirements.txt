@@ -1,5 +1,6 @@
 alembic==1.14.0
 fastapi==0.115.6
+python-multipart>=0.0.18,<0.1.0
 httpx==0.28.1
 bcrypt>=4.1.2,<6.0.0
 anyio>=4.0,<4.15  # Starlette 0.41.3 still uses anyio.abc.BlockingPortal.
@@ -7,5 +8,7 @@ pydantic-settings==2.7.1
 pytest==8.3.4
 python-jose==3.5.0
 sqlalchemy==2.0.36
+psycopg[binary]>=3.2,<4.0
+redis[hiredis]>=5.2,<6.0
 uvicorn[standard]==0.34.0
 sentry-sdk[fastapi]>=2.0,<3.0

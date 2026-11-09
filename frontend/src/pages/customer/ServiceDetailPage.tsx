@@ -32,6 +32,12 @@ export function ServiceDetailPage() {
           <Link to={`/join/${query.data.id}`} className="mt-6 inline-block rounded-full bg-ink px-6 py-3 text-white">
             Join queue
           </Link>
+          <Link
+            to={`/services/${query.data.id}/appointments`}
+            className="ml-3 mt-6 inline-block rounded-full border border-ink/20 px-6 py-3 font-semibold"
+          >
+            Book appointment
+          </Link>
           <QuickJoinCard serviceId={query.data.id} branchId={query.data.branch_id} serviceName={query.data.name} />
         </article>
       )}

@@ -4,16 +4,14 @@
 
 :root { font-family: Inter, ui-sans-serif, system-ui, sans-serif; font-synthesis: none; text-rendering: optimizeLegibility; }
 * { box-sizing: border-box; }
-body { margin: 0; min-width: 320px; }
+html { scroll-behavior: smooth; }
+body { margin: 0; min-width: 320px; background: #f7f8f2; }
+::selection { color: #10211b; background: #c7f36b; }
+:focus-visible { outline: 3px solid #15803d; outline-offset: 3px; }
 
 @keyframes queue-orbit {
   from { transform: rotate(0deg) scale(1); }
   to { transform: rotate(360deg) scale(1.08); }
-}
-
-@keyframes queue-float {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-8px); }
 }
 
 .auth-orbit {
@@ -38,19 +36,10 @@ body { margin: 0; min-width: 320px; }
   animation: queue-orbit 55s linear infinite reverse;
 }
 
-.auth-ticket-card {
-  animation: queue-float 6s ease-in-out infinite;
-}
-
-.auth-float-card {
-  animation: queue-float 5s ease-in-out infinite reverse;
-}
-
 @media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
   .auth-orbit-one,
-  .auth-orbit-two,
-  .auth-ticket-card,
-  .auth-float-card {
+  .auth-orbit-two {
     animation: none;
   }
 }

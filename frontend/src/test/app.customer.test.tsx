@@ -60,37 +60,36 @@ it("validates register form", async () => {
 
 it("sends a newly registered customer to the service list", async () => {
   setPath("/register");
-  mockFetchSequence([
-    { body: { client_id: "google-client-id", nonce: "test-google-nonce" } },
-    {
-      body: [{ id: "org-1", name: "Organization", slug: "organization", description: null }],
-    },
-    {
-      status: 201,
-      body: {
-        session_token: "new-customer-session",
-        user: {
-          id: "customer-1",
-          full_name: "New Customer",
-          email: "new@example.com",
-          role: "customer",
-          organization_id: null,
-          created_at: new Date().toISOString(),
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    const url = new URL(String(input), window.location.origin);
+    if (url.pathname.endsWith("/api/v1/auth/register")) {
+      return Response.json(
+        {
+          session_token: "new-customer-session",
+          user: {
+            id: "customer-1",
+            full_name: "New Customer",
+            email: "new@example.com",
+            role: "customer",
+            organization_id: null,
+            created_at: new Date().toISOString(),
+          },
         },
-      },
-    },
-    {
-      body: [
+        { status: 201 },
+      );
+    }
+    if (url.pathname.endsWith("/api/v1/catalog/organizations")) {
+      return Response.json([
         {
           id: "org-1",
           name: "Organization",
           slug: "organization",
           description: null,
         },
-      ],
-    },
-    {
-      body: [
+      ]);
+    }
+    if (url.pathname.endsWith("/api/v1/catalog/branches")) {
+      return Response.json([
         {
           id: "branch-1",
           organization_id: "org-1",
@@ -98,10 +97,10 @@ it("sends a newly registered customer to the service list", async () => {
           address: null,
           timezone: "UTC",
         },
-      ],
-    },
-    {
-      body: [
+      ]);
+    }
+    if (url.pathname.endsWith("/api/v1/catalog/services")) {
+      return Response.json([
         {
           id: "service-1",
           branch_id: "branch-1",
@@ -111,9 +110,10 @@ it("sends a newly registered customer to the service list", async () => {
           average_service_minutes: 10,
           queue_id: "queue-1",
         },
-      ],
-    },
-  ]);
+      ]);
+    }
+    throw new Error(`Unexpected request: ${url.pathname}`);
+  });
   renderApp();
 
   fireEvent.change(await screen.findByLabelText(/full name/i), {
@@ -134,10 +134,54 @@ it("sends a newly registered customer to the service list", async () => {
   expect(await screen.findByText("Admissions")).toBeInTheDocument();
 });
 
+it("shows that a custom organization registration is waiting for admin approval", async () => {
+  setPath("/register");
+  const fetchMock = mockFetchSequence([
+    {
+      status: 202,
+      body: {
+        status: "pending_approval",
+        email: "new@example.com",
+        organization_name: "New Organization",
+        message: "Your organization request is awaiting approval.",
+      },
+    },
+  ]);
+  renderApp();
+
+  fireEvent.change(await screen.findByLabelText(/full name/i), {
+    target: { value: "New Customer" },
+  });
+  fireEvent.change(await screen.findByLabelText(/^email$/i), {
+    target: { value: "new@example.com" },
+  });
+  fireEvent.change(await screen.findByLabelText(/^password$/i), {
+    target: { value: "customer-password" },
+  });
+  fireEvent.change(await screen.findByLabelText(/confirm password/i), {
+    target: { value: "customer-password" },
+  });
+  fireEvent.change(await screen.findByLabelText(/organization \(optional\)/i), {
+    target: { value: "New Organization" },
+  });
+  fireEvent.click(await screen.findByRole("button", { name: /create account/i }));
+
+  expect(await screen.findByRole("status")).toHaveTextContent(
+    "Your organization request is awaiting approval.",
+  );
+  expect(window.location.pathname).toBe("/register");
+  expect(sessionStorage.getItem("queueless.session")).toBeNull();
+  const registrationRequest = fetchMock.mock.calls.find(([input]) =>
+    String(input).endsWith("/api/v1/auth/register"),
+  );
+  expect(JSON.parse(String(registrationRequest?.[1]?.body))).toMatchObject({
+    organization_name: "New Organization",
+  });
+});
+
 it("signs in a customer and stores the tab-scoped session", async () => {
   setPath("/login");
   mockFetchSequence([
-    { body: { client_id: "google-client-id", nonce: "test-google-nonce" } },
     {
       body: {
         session_token: "login-session",
@@ -165,7 +209,7 @@ it("signs in a customer and stores the tab-scoped session", async () => {
   fireEvent.click(screen.getByRole("button", { name: /sign in/i }));
 
   expect(
-    await screen.findByRole("heading", { name: "Your time is yours again." }),
+    await screen.findByRole("heading", { name: "Welcome back" }),
   ).toBeInTheDocument();
   expect(sessionStorage.getItem("queueless.session")).toBe("login-session");
 });
@@ -217,9 +261,10 @@ it("keeps customers on the customer home instead of redirecting to itself", asyn
     },
   });
   setPath("/");
-  mockFetchSequence([
-    {
-      body: [
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    const url = String(input);
+    if (url.includes("/api/v1/catalog/services")) {
+      return Response.json([
         {
           id: "service-1",
           branch_id: "branch-1",
@@ -229,13 +274,35 @@ it("keeps customers on the customer home instead of redirecting to itself", asyn
           average_service_minutes: 12,
           queue_id: "queue-1",
         },
-      ],
-    },
-  ]);
+      ]);
+    }
+    if (
+      url.includes("/api/v1/catalog/branches") ||
+      url.includes("/api/v1/customers/queue-requests")
+    ) {
+      return Response.json([]);
+    }
+    if (url.includes("/api/v1/customers/history")) {
+      return Response.json({ page: 1, page_size: 50, total: 0, items: [] });
+    }
+    if (url.includes("/api/v1/notifications/unread-count")) {
+      return Response.json({ count: 0 });
+    }
+    if (url.includes("/api/v1/notifications?")) {
+      return Response.json({ items: [], total: 0 });
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
   renderApp();
 
   expect(
     await screen.findByRole("heading", { name: "Your time is yours again." }),
+  ).toBeInTheDocument();
+  expect(
+    await screen.findByRole("heading", { name: "Welcome back, Customer." }),
+  ).toBeInTheDocument();
+  expect(
+    await screen.findByText("No active queue right now"),
   ).toBeInTheDocument();
   expect(
     await screen.findByRole("heading", { name: "Passport services" }),
@@ -296,6 +363,69 @@ it("opens the requested admin resource page", async () => {
   expect(screen.getByText("Create")).toBeInTheDocument();
 });
 
+it("lets an administrator approve a pending organization request", async () => {
+  useAuthStore.setState({
+    token: "admin-token",
+    user: {
+      id: "admin-1",
+      full_name: "Admin User",
+      email: "admin@example.com",
+      role: "admin",
+      organization_id: null,
+      created_at: new Date().toISOString(),
+    },
+  });
+  setPath("/admin/organizations");
+  const fetchMock = mockFetchSequence([
+    {
+      body: {
+        items: [
+          {
+            id: "org-1",
+            name: "Pending Organization",
+            is_active: false,
+            is_approved: false,
+          },
+        ],
+        total: 1,
+        page: 1,
+        page_size: 20,
+      },
+    },
+    { body: { organization: { id: "org-1" }, approved_accounts: 1 } },
+    {
+      body: {
+        items: [
+          {
+            id: "org-1",
+            name: "Pending Organization",
+            is_active: true,
+            is_approved: true,
+          },
+        ],
+        total: 1,
+        page: 1,
+        page_size: 20,
+      },
+    },
+  ]);
+  renderApp();
+
+  fireEvent.click(
+    await screen.findByRole("button", { name: /approve organization/i }),
+  );
+  await waitFor(() =>
+    expect(
+      screen.queryByRole("button", { name: /approve organization/i }),
+    ).not.toBeInTheDocument(),
+  );
+  expect(
+    fetchMock.mock.calls.some(([input]) =>
+      String(input).endsWith("/api/v1/admin/organizations/org-1/approve"),
+    ),
+  ).toBe(true);
+});
+
 it("keeps staff accounts out of customer-only routes", async () => {
   useAuthStore.setState({
     token: "staff-token",
@@ -329,10 +459,26 @@ it("renders service list", async () => {
   mockFetchSequence([
     { body: [{ id: "org-1", name: "Babcock University", slug: "babcock", description: null }] },
     { body: [{ id: "branch-1", organization_id: "org-1", name: "Student Affairs", address: null, timezone: "Africa/Lagos" }] },
-    { body: [{ id: "svc-1", branch_id: "branch-1", name: "Admissions", code: "ADM", description: "Admissions desk", average_service_minutes: 10, queue_id: "q-1" }] },
+    { body: [
+      { id: "svc-1", branch_id: "branch-1", name: "Admissions", code: "ADM", description: "University entry desk", average_service_minutes: 10, queue_id: "q-1" },
+      { id: "svc-2", branch_id: "branch-1", name: "Licensing", code: "LIC", description: "Vehicle permits", average_service_minutes: 15, queue_id: "q-2" },
+    ] },
   ]);
   renderApp();
   expect(await screen.findByText("Admissions")).toBeInTheDocument();
+  expect(screen.getByText("Licensing")).toBeInTheDocument();
+
+  fireEvent.change(screen.getByRole("searchbox", { name: /search services/i }), {
+    target: { value: "lic" },
+  });
+  expect(screen.getByText("Licensing")).toBeInTheDocument();
+  expect(screen.queryByText("Admissions")).not.toBeInTheDocument();
+
+  fireEvent.change(screen.getByRole("searchbox", { name: /search services/i }), {
+    target: { value: "entry" },
+  });
+  expect(screen.getByText("Admissions")).toBeInTheDocument();
+  expect(screen.queryByText("Licensing")).not.toBeInTheDocument();
 });
 
 it("supports join queue flow and renders ticket + position", async () => {

@@ -14,6 +14,10 @@ import { serviceJoinUrl } from "../../utils/queueUrls";
 export function AdminQueuePage() {
   const { queueId = "" } = useParams();
   const token = useAuthStore((state) => state.token)!;
+  const resourceBase =
+    useAuthStore((state) => state.user?.role) === "super_admin"
+      ? "/super-admin"
+      : "/admin";
   const queryClient = useQueryClient();
   const [page, setPage] = useState(1);
   const query = useQuery({
@@ -41,13 +45,19 @@ export function AdminQueuePage() {
 
   const queue = query.data;
   const totalPages = Math.max(1, Math.ceil(queue.total_entries / queue.page_size));
-  const joinUrl = serviceJoinUrl(queue.service_id, queue.branch_id);
+  const joinUrl = serviceJoinUrl(
+    queue.service_id,
+    queue.branch_id,
+    window.location.origin,
+    import.meta.env.BASE_URL,
+    queue.id,
+  );
 
   return (
     <PageContainer className="py-10">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <Link className="text-sm font-semibold text-emerald-800" to="/admin/queues">
+          <Link className="text-sm font-semibold text-emerald-800" to={`${resourceBase}/queues`}>
             Back to queues
           </Link>
           <h1 className="mt-2 text-4xl font-black">{queue.name}</h1>

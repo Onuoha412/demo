@@ -6,9 +6,9 @@ frontend/test-results/
 !.env.example
 .venv/
 backend/.venv/
+backend/queueless.db
+backend/queueless.db-shm
+backend/queueless.db-wal
 __pycache__/
 *.py[cod]
-*.db
-*.sqlite
-*.sqlite3
 .DS_Store

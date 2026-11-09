@@ -5,12 +5,10 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
-from sqlalchemy.pool import StaticPool
 
 from app.api.auth_dependencies import get_current_user
-from app.db.base import Base
 from app.db.session import get_db
 from app.main import app
 from app.models import (
@@ -19,33 +17,26 @@ from app.models import (
     Notification,
     NotificationPreference,
     Organization,
+    OrganizationMembership,
     Queue,
     QueueEntry,
     Service,
     User,
 )
-from app.models.entities import CounterStatus, QueueEntryStatus, UserRole
+from app.models.entities import CounterStatus, QueueEntryStatus, QueueStatus, UserRole
 from app.services.notifications import NotificationService
 from app.services.queue import QueueService
 from app.services.realtime import RealtimeManager
 
 
 @pytest.fixture
-def session() -> Generator[Session, None, None]:
-    engine = create_engine(
-        "sqlite://",
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
-    )
-    Base.metadata.create_all(engine)
-    db = Session(engine, expire_on_commit=False)
+def session(database_engine) -> Generator[Session, None, None]:
+    db = Session(database_engine, expire_on_commit=False)
     try:
         yield db
     finally:
         app.dependency_overrides.clear()
         db.close()
-        Base.metadata.drop_all(engine)
-        engine.dispose()
 
 
 def create_queue(session: Session) -> tuple[Branch, Service, Queue]:
@@ -84,8 +75,17 @@ def test_qr_join_creates_ticket_and_joined_and_called_notifications(
         email=f"{uuid.uuid4()}@example.test",
         password_hash="test-hash",
         role=UserRole.ADMIN,
+        organization=branch.organization,
     )
     session.add_all([customer, staff, admin])
+    session.commit()
+    session.add(
+        OrganizationMembership(
+            user_id=admin.id,
+            organization_id=branch.organization_id,
+            role=UserRole.ADMIN.value,
+        )
+    )
     session.commit()
 
     def override_db() -> Generator[Session, None, None]:
@@ -152,6 +152,136 @@ def test_qr_join_creates_ticket_and_joined_and_called_notifications(
         f"/api/v1/admin/queue-entries/{ticket['id']}/verify"
     )
     assert repeated_verification.json()["verified_at"] == verified_ticket["verified_at"]
+
+
+def test_generic_service_join_chooses_the_least_loaded_open_queue(
+    session: Session,
+) -> None:
+    branch, service, first_queue = create_queue(session)
+    second_queue = Queue(name="Admissions overflow", prefix="B", service=service)
+    existing_customers = [make_customer(f"Existing {index}") for index in range(3)]
+    joining_customer = make_customer("New customer")
+    session.add_all([second_queue, *existing_customers, joining_customer])
+    session.commit()
+
+    for customer in existing_customers[:2]:
+        QueueService(session).join(first_queue.id, customer.id)
+    QueueService(session).join(second_queue.id, existing_customers[2].id)
+
+    app.dependency_overrides[get_db] = lambda: session
+    app.dependency_overrides[get_current_user] = lambda: joining_customer
+    response = TestClient(app).post(
+        f"/api/v1/customers/services/{service.id}/join",
+        params={"branch_id": str(branch.id)},
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["queue_id"] == str(second_queue.id)
+
+
+def test_generic_service_join_skips_paused_and_full_queues(
+    session: Session,
+) -> None:
+    branch, service, paused_queue = create_queue(session)
+    paused_queue.status = QueueStatus.PAUSED
+    full_queue = Queue(
+        name="Full queue",
+        prefix="F",
+        service=service,
+        capacity_limit=1,
+    )
+    available_queue = Queue(name="Available queue", prefix="A", service=service)
+    existing_customer = make_customer("Already queued")
+    joining_customer = make_customer("New customer")
+    session.add_all([full_queue, available_queue, existing_customer, joining_customer])
+    session.commit()
+    QueueService(session).join(full_queue.id, existing_customer.id)
+
+    app.dependency_overrides[get_db] = lambda: session
+    app.dependency_overrides[get_current_user] = lambda: joining_customer
+    client = TestClient(app)
+    response = client.post(
+        f"/api/v1/customers/services/{service.id}/join",
+        params={"branch_id": str(branch.id)},
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["queue_id"] == str(available_queue.id)
+
+    exact_target = make_customer("Exact QR customer")
+    session.add(exact_target)
+    session.commit()
+    app.dependency_overrides[get_current_user] = lambda: exact_target
+    unavailable_target = client.post(
+        f"/api/v1/customers/services/{service.id}/join",
+        params={"branch_id": str(branch.id), "queue_id": str(paused_queue.id)},
+    )
+    assert unavailable_target.status_code == 409
+
+    available_queue.status = QueueStatus.CLOSED
+    session.commit()
+    no_open_queue_customer = make_customer("No open queue customer")
+    session.add(no_open_queue_customer)
+    session.commit()
+    app.dependency_overrides[get_current_user] = lambda: no_open_queue_customer
+    no_open_queue = client.post(
+        f"/api/v1/customers/services/{service.id}/join",
+        params={"branch_id": str(branch.id)},
+    )
+    assert no_open_queue.status_code == 409
+
+
+def test_customer_reuses_active_entry_for_service_across_queues(
+    session: Session,
+) -> None:
+    branch, service, first_queue = create_queue(session)
+    second_queue = Queue(name="Admissions overflow", prefix="B", service=service)
+    customer = make_customer("Returning customer")
+    session.add_all([second_queue, customer])
+    session.commit()
+    existing = QueueService(session).join(first_queue.id, customer.id)
+
+    app.dependency_overrides[get_db] = lambda: session
+    app.dependency_overrides[get_current_user] = lambda: customer
+    response = TestClient(app).post(
+        f"/api/v1/customers/services/{service.id}/join",
+        params={"branch_id": str(branch.id), "queue_id": str(second_queue.id)},
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["id"] == str(existing["id"])
+    assert response.json()["queue_id"] == str(first_queue.id)
+
+
+def test_queue_realtime_events_are_published_after_database_commit(
+    session: Session,
+) -> None:
+    _, _, queue = create_queue(session)
+    customer = make_customer("Committed customer")
+    session.add(customer)
+    session.commit()
+    observed_events: list[str] = []
+
+    def assert_durable_before_publish(queue_id, event, data=None) -> None:
+        assert queue_id == queue.id
+        with Session(session.bind) as observer:
+            entry = observer.scalar(
+                select(QueueEntry).where(
+                    QueueEntry.queue_id == queue_id,
+                    QueueEntry.customer_id == customer.id,
+                )
+            )
+            assert entry is not None
+            assert entry.status is QueueEntryStatus.WAITING
+            observed_events.append(event)
+
+    with patch(
+        "app.services.queue.realtime.publish_nowait",
+        side_effect=assert_durable_before_publish,
+    ):
+        QueueService(session).join(queue.id, customer.id)
+
+    assert observed_events == ["CUSTOMER_JOINED", "QUEUE_UPDATED"]
 
 
 def test_approaching_and_queue_status_events_are_idempotent(session: Session) -> None:
