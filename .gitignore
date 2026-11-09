@@ -9,6 +9,7 @@ backend/.venv/
 backend/queueless.db
 backend/queueless.db-shm
 backend/queueless.db-wal
+backend/backups/
 __pycache__/
 *.py[cod]
 .DS_Store
