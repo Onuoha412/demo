@@ -101,6 +101,15 @@ npm ci --prefix frontend
 npm run dev --prefix frontend
 ```
 
+To start the API and frontend together with one command:
+
+```sh
+./scripts/start-dev.sh
+```
+
+This uses the local SQLite database and Vite's local API/WebSocket proxy. It
+stops both processes when the command exits.
+
 The local Vite server proxies API and WebSocket requests to
 `http://localhost:8000`. The backend accepts either `JWT_SECRET` or
 `JWT_SECRET_KEY`; `SECRET_KEY` and the JWT key must be distinct, unique random
