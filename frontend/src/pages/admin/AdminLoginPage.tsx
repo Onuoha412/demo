@@ -3,6 +3,7 @@ import { useMutation } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import { AuthLayout } from "../../components/auth/AuthLayout";
+import { PasswordInput } from "../../components/common/PasswordInput";
 import { ApiError } from "../../services/api";
 import { login, logoutSession } from "../../services/auth";
 import { useAuthStore } from "../../store/authStore";
@@ -55,7 +56,7 @@ export function AdminLoginPage() {
         </label>
         <label className="block text-sm font-semibold">
           Password
-          <input aria-label="Password" autoComplete="current-password" className="mt-1 w-full rounded-xl border border-ink/15 p-3" type="password" value={password} onChange={(event) => setPassword(event.target.value)} required />
+          <PasswordInput aria-label="Password" autoComplete="current-password" className="mt-1 w-full rounded-xl border border-ink/15 p-3" value={password} onChange={(event) => setPassword(event.target.value)} required />
         </label>
         {(error || mutation.error instanceof ApiError) && <p role="alert" className="text-sm text-red-600">{error ?? mutation.error?.message}</p>}
         <button className="w-full rounded-full bg-ink px-4 py-3 font-bold text-white disabled:opacity-60" disabled={mutation.isPending}>{mutation.isPending ? "Signing in..." : "Sign in"}</button>

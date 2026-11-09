@@ -7,6 +7,7 @@ import { ApiError } from "../../services/api";
 import { register } from "../../services/auth";
 import { useAuthStore } from "../../store/authStore";
 import { AuthLayout } from "../../components/auth/AuthLayout";
+import { PasswordInput } from "../../components/common/PasswordInput";
 
 export function RegisterPage() {
   const navigate = useNavigate();
@@ -17,7 +18,6 @@ export function RegisterPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
   const [rememberDevice, setRememberDevice] = useState(false);
   const [organizationName, setOrganizationName] = useState("");
   const [validationError, setValidationError] = useState<string | null>(null);
@@ -97,33 +97,21 @@ export function RegisterPage() {
 
         <label className="block text-sm font-semibold text-slate-700" htmlFor="register-password">
           Password
-          <div className="relative mt-1">
-            <input
-              id="register-password"
-              className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3 pr-12 text-slate-900 shadow-sm transition focus:border-emerald-400 focus:bg-white focus:outline-none focus:ring-4 focus:ring-emerald-100"
-              type={showPassword ? "text" : "password"}
-              autoComplete="new-password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              required
-            />
-            <button
-              type="button"
-              aria-label={showPassword ? "Hide password" : "Show password"}
-              className="absolute inset-y-0 right-3 flex items-center text-sm font-medium text-slate-500 transition hover:text-slate-700"
-              onClick={() => setShowPassword((current) => !current)}
-            >
-              {showPassword ? "Hide" : "Show"}
-            </button>
-          </div>
+          <PasswordInput
+            id="register-password"
+            className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3 text-slate-900 shadow-sm transition focus:border-emerald-400 focus:bg-white focus:outline-none focus:ring-4 focus:ring-emerald-100"
+            autoComplete="new-password"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            required
+          />
         </label>
 
         <label className="block text-sm font-semibold text-slate-700" htmlFor="register-confirm-password">
           Confirm password
-          <input
+          <PasswordInput
             id="register-confirm-password"
             className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3 text-slate-900 shadow-sm transition focus:border-emerald-400 focus:bg-white focus:outline-none focus:ring-4 focus:ring-emerald-100"
-            type={showPassword ? "text" : "password"}
             autoComplete="new-password"
             value={confirmPassword}
             onChange={(event) => setConfirmPassword(event.target.value)}

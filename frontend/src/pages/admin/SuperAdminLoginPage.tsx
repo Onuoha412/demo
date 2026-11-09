@@ -3,6 +3,7 @@ import { useMutation } from "@tanstack/react-query";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import { AuthLayout } from "../../components/auth/AuthLayout";
+import { PasswordInput } from "../../components/common/PasswordInput";
 import { ApiError } from "../../services/api";
 import { login, logoutSession } from "../../services/auth";
 import { useAuthStore } from "../../store/authStore";
@@ -74,11 +75,10 @@ export function SuperAdminLoginPage() {
         </label>
         <label className="block text-sm font-semibold">
           Password
-          <input
+          <PasswordInput
             aria-label="Password"
             autoComplete="current-password"
             className="mt-1 w-full rounded-xl border border-ink/15 p-3"
-            type="password"
             value={password}
             onChange={(event) => setPassword(event.target.value)}
             required

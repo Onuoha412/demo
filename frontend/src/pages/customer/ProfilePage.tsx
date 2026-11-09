@@ -3,6 +3,7 @@ import { useMutation } from "@tanstack/react-query";
 
 import { ErrorState } from "../../components/common/ErrorState";
 import { PageContainer } from "../../components/common/PageContainer";
+import { PasswordInput } from "../../components/common/PasswordInput";
 import { changePassword, updateProfile } from "../../services/auth";
 import { useAuthStore } from "../../store/authStore";
 import { ApiError } from "../../services/api";
@@ -125,20 +126,19 @@ export function ProfilePage() {
         </p>
         <label className="mt-5 block text-sm font-semibold text-ink" htmlFor="current-password">
           Current password
-          <input
+          <PasswordInput
             autoComplete="current-password"
             className="mt-1 w-full rounded-xl border border-ink/15 bg-white px-3.5 py-3"
             id="current-password"
             maxLength={128}
             onChange={(event) => setCurrentPassword(event.target.value)}
             required
-            type="password"
             value={currentPassword}
           />
         </label>
         <label className="mt-4 block text-sm font-semibold text-ink" htmlFor="new-password">
           New password
-          <input
+          <PasswordInput
             autoComplete="new-password"
             className="mt-1 w-full rounded-xl border border-ink/15 bg-white px-3.5 py-3"
             id="new-password"
@@ -146,13 +146,12 @@ export function ProfilePage() {
             maxLength={128}
             onChange={(event) => setNewPassword(event.target.value)}
             required
-            type="password"
             value={newPassword}
           />
         </label>
         <label className="mt-4 block text-sm font-semibold text-ink" htmlFor="confirm-password">
           Confirm new password
-          <input
+          <PasswordInput
             autoComplete="new-password"
             className="mt-1 w-full rounded-xl border border-ink/15 bg-white px-3.5 py-3"
             id="confirm-password"
@@ -160,7 +159,6 @@ export function ProfilePage() {
             maxLength={128}
             onChange={(event) => setConfirmPassword(event.target.value)}
             required
-            type="password"
             value={confirmPassword}
           />
         </label>

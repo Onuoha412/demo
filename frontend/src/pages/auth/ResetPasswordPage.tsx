@@ -3,6 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 
 import { AuthLayout } from "../../components/auth/AuthLayout";
+import { PasswordInput } from "../../components/common/PasswordInput";
 import { ApiError } from "../../services/api";
 import { resetPassword, verifyResetToken } from "../../services/auth";
 
@@ -50,11 +51,11 @@ export function ResetPasswordPage() {
         <form className="space-y-4" onSubmit={submit}>
           <label className="block text-sm font-semibold">
             New password
-            <input className="mt-1 w-full rounded-xl border border-ink/15 px-4 py-3" type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} required />
+            <PasswordInput className="mt-1 w-full rounded-xl border border-ink/15 px-4 py-3" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} required />
           </label>
           <label className="block text-sm font-semibold">
             Confirm new password
-            <input className="mt-1 w-full rounded-xl border border-ink/15 px-4 py-3" type="password" autoComplete="new-password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} required />
+            <PasswordInput className="mt-1 w-full rounded-xl border border-ink/15 px-4 py-3" autoComplete="new-password" value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} required />
           </label>
           {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
           {message && <p role="status" className="text-sm text-emerald-800">{message}</p>}
