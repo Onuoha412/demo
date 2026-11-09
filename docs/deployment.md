@@ -58,7 +58,9 @@ or `master`, after the backend readiness check passes. Enable GitHub Pages
 with **GitHub Actions** as its source. Configure repository Actions variables:
 
 - `VITE_API_URL`: HTTPS backend origin, for example `https://<api-host>`.
-- `VITE_WS_URL`: WSS backend origin, for example `wss://<api-host>`.
+- `VITE_WS_URL`: optional WSS backend origin, for example
+  `wss://<api-host>`. If omitted, the workflow derives it from
+  `VITE_API_URL` by replacing `https://` with `wss://`.
 - `VITE_BASE_PATH`: optional root-relative base path; the workflow detects
   project versus user/organization Pages sites when omitted.
 - `VITE_SENTRY_DSN`, `VITE_POSTHOG_KEY`, and `VITE_POSTHOG_HOST`: optional
@@ -68,9 +70,11 @@ The first deployment requires this order:
 
 1. Deploy the backend and configure PostgreSQL (or single-instance SQLite) and
    Redis until `/ready` returns HTTP 200.
-2. Set `VITE_API_URL` and `VITE_WS_URL` as repository **Variables** under
-   Settings → Secrets and variables → Actions. Do not put credentials in these
-   values; they are embedded in public JavaScript.
+2. Set `VITE_API_URL` as a repository **Variable** under Settings → Secrets
+   and variables → Actions. Optionally set `VITE_WS_URL` when WebSockets use a
+   different host; otherwise the workflow creates the matching WSS URL
+   automatically. Do not put credentials in these values; they are embedded in
+   public JavaScript.
 3. Enable Settings → Pages → Build and deployment → **GitHub Actions**.
 4. Push to `main` or `master`, or run the `QueueLess Stages` workflow manually.
 
