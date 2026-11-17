@@ -6,6 +6,7 @@ import { ErrorState } from "../components/common/ErrorState";
 import { LoadingState } from "../components/common/LoadingState";
 import { PageContainer } from "../components/common/PageContainer";
 import { WS_BASE, apiRequest } from "../services/api";
+import { startWebSocketHeartbeat } from "../utils/websocketHeartbeat";
 import {
   assignFeedback,
   addFeedbackNote,
@@ -75,6 +76,7 @@ function useFeedbackUpdates(enabled: boolean) {
     let stopped = false;
     let socket: WebSocket | null = null;
     let retry: ReturnType<typeof setTimeout> | undefined;
+    let stopHeartbeat = () => {};
 
     const connect = async () => {
       try {
@@ -85,7 +87,10 @@ function useFeedbackUpdates(enabled: boolean) {
         socket = new WebSocket(
           `${WS_BASE}/ws/feedback?${new URLSearchParams({ ticket: result.ticket })}`,
         );
+        const activeSocket = socket;
         socket.onopen = () => {
+          stopHeartbeat();
+          stopHeartbeat = startWebSocketHeartbeat(activeSocket);
           void client.invalidateQueries({ queryKey: ["feedback-managed"] });
           void client.invalidateQueries({ queryKey: ["feedback-mine"] });
         };
@@ -95,6 +100,8 @@ function useFeedbackUpdates(enabled: boolean) {
           void client.invalidateQueries({ queryKey: ["feedback-metrics"] });
         };
         socket.onclose = () => {
+          stopHeartbeat();
+          stopHeartbeat = () => {};
           if (!stopped) retry = setTimeout(() => void connect(), 1500);
         };
       } catch {
@@ -106,6 +113,7 @@ function useFeedbackUpdates(enabled: boolean) {
     return () => {
       stopped = true;
       if (retry) clearTimeout(retry);
+      stopHeartbeat();
       socket?.close();
     };
   }, [client, enabled]);

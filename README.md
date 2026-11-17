@@ -234,10 +234,18 @@ idempotency, and wait-time calculation.
 ## Authentication, database, and security
 
 The API stores only hashes of opaque session values and accepts session tokens
-as bearer credentials. The frontend keeps tokens in tab-scoped
-`sessionStorage`, never `localStorage`; logout and password reset revoke the
-server-side session. Password-reset tokens are hashed, single-use, and expire
-after 30 minutes.
+as bearer credentials. By default, the frontend keeps the session in
+tab-scoped `sessionStorage`; choosing **Keep me signed in** stores the opaque
+session token in `localStorage` so the user can return on a later visit. Logout
+and password reset revoke the server-side session, and remembered sessions
+expire after the configured session lifetime. Password-reset tokens are hashed,
+single-use, and expire after 30 minutes.
+
+Customers can create accounts directly. Staff and organization administrators
+can request accounts from the registration page; staff requests require an
+organization and branch and are approved by an organization administrator,
+while organization administrator requests require Super Admin approval.
+Creating an administrator account never grants elevated access until approval.
 
 SQLite and PostgreSQL are supported application databases. SQLAlchemy ORM
 queries and bound parameters protect database operations from SQL injection.

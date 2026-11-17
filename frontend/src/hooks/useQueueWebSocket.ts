@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { WS_BASE, apiRequest } from "../services/api";
 import { captureWebSocketFailure } from "../observability";
+import { startWebSocketHeartbeat } from "../utils/websocketHeartbeat";
 
 export type QueueSocketEvent = {
   event: string;
@@ -27,8 +28,7 @@ export function useQueueWebSocket(queueId: string | undefined, token?: string) {
   const queryClient = useQueryClient();
   const socketRef = useRef<WebSocket | null>(null);
   const retryRef = useRef(0);
-  const lastEventRef = useRef<number | null>(null);
-  const connectedAtRef = useRef<number | null>(null);
+  const queueIdRef = useRef(queueId);
   const lastSequenceRef = useRef<number | undefined>(undefined);
   const seenEventIdsRef = useRef<Set<string>>(new Set());
   const [status, setStatus] = useState<"connecting" | "connected" | "disconnected" | "stale">("disconnected");
@@ -39,6 +39,8 @@ export function useQueueWebSocket(queueId: string | undefined, token?: string) {
     void queryClient.invalidateQueries({ queryKey: ["queue-history"] });
     void queryClient.invalidateQueries({ queryKey: ["wait-time-prediction"] });
     void queryClient.invalidateQueries({ queryKey: ["staff-dashboard"] });
+    void queryClient.invalidateQueries({ queryKey: ["staff-customers"] });
+    void queryClient.invalidateQueries({ queryKey: ["staff-history"] });
     void queryClient.invalidateQueries({ queryKey: ["staff-queue", queueId] });
     void queryClient.invalidateQueries({ queryKey: ["admin-queue", queueId] });
     void queryClient.invalidateQueries({ queryKey: ["admin-analytics"] });
@@ -49,16 +51,16 @@ export function useQueueWebSocket(queueId: string | undefined, token?: string) {
   }, [queryClient, queueId]);
 
   useEffect(() => {
+    if (queueIdRef.current !== queueId) {
+      queueIdRef.current = queueId;
+      lastSequenceRef.current = undefined;
+      seenEventIdsRef.current.clear();
+      setLastEventAt(null);
+    }
     if (!queueId) return;
     let stopped = false;
     let retryTimer: number | undefined;
-    const staleTimer = window.setInterval(() => {
-      const lastActivity = lastEventRef.current ?? connectedAtRef.current;
-      if (lastActivity && Date.now() - lastActivity > 60000) {
-        setStatus("stale");
-        socketRef.current?.close();
-      }
-    }, 10000);
+    let stopHeartbeat = () => {};
     const connect = async () => {
       if (stopped) return;
       setStatus("connecting");
@@ -76,7 +78,8 @@ export function useQueueWebSocket(queueId: string | undefined, token?: string) {
       socketRef.current = socket;
       socket.onopen = () => {
         retryRef.current = 0;
-        connectedAtRef.current = Date.now();
+        stopHeartbeat();
+        stopHeartbeat = startWebSocketHeartbeat(socket);
         setStatus("connected");
         refreshQueueState();
       };
@@ -98,16 +101,19 @@ export function useQueueWebSocket(queueId: string | undefined, token?: string) {
             channel.close();
           }
           const receivedAt = Date.now();
-          lastEventRef.current = receivedAt;
           setLastEventAt(receivedAt);
           setStatus("connected");
           refreshQueueState();
           if (event.data) queryClient.setQueryData(["queue-event", queueId], event);
-        } catch { setStatus("stale"); }
+        } catch (error) {
+          console.error("Unable to process a QueueLess queue update.", error);
+          setStatus("stale");
+        }
       };
       socket.onclose = (closeEvent) => {
         socketRef.current = null;
-        connectedAtRef.current = null;
+        stopHeartbeat();
+        stopHeartbeat = () => {};
         if (stopped) return;
         setStatus("disconnected");
         if (
@@ -131,8 +137,7 @@ export function useQueueWebSocket(queueId: string | undefined, token?: string) {
     return () => {
       stopped = true;
       if (retryTimer) window.clearTimeout(retryTimer);
-      if (staleTimer) window.clearInterval(staleTimer);
-      connectedAtRef.current = null;
+      stopHeartbeat();
       socketRef.current?.close();
     };
   }, [queueId, token, queryClient, refreshQueueState]);

@@ -22,8 +22,10 @@ them in public assets.
   repository path for project Pages sites. Set `RESET_PASSWORD_URL` to the
   frontend's `/reset-password` route and `CORS_ORIGINS` to the exact frontend
   origin only (scheme and host, without a path).
-- Authenticated frontend requests use revocable bearer session tokens held in
-  tab-scoped `sessionStorage`; they do not depend on third-party cookies.
+- Authenticated frontend requests use revocable bearer session tokens and do
+  not depend on third-party cookies. Sign-in is tab-scoped by default; users
+  who select **Keep me signed in** keep the token on that browser until they
+  log out or its configured session lifetime expires.
 - Production requires `EMAIL_MODE=smtp`; supply `SMTP_HOST`, `SMTP_FROM`, and
   (when required by the provider) `SMTP_USERNAME` and `SMTP_PASSWORD`. The
   service fails closed when SMTP is missing so reset links are not exposed in
@@ -50,8 +52,15 @@ All registered accounts and queue activity are stored by the shared API in its
 persistent database, so signed-in users see the same live service state from
 each device. The Super Admin user list covers registered accounts; anonymous
 page visits are not turned into user accounts or tracked as a visitor roster.
-Realtime delivery assumes the host supports WebSocket upgrades and keeps all
-API traffic on the single configured API instance.
+Customers can register directly. Staff signup creates an inactive request for
+the selected organization and branch; an organization administrator must
+approve it. Organization administrator signup also creates an inactive
+request, which only a Super Admin can approve. Super Admin accounts are never
+publicly self-registered. Organization admins can create and manage multiple
+services, branches, counters, and queues within their organization.
+Realtime delivery uses WebSocket keepalives and reconnects after network loss.
+The host must support WebSocket upgrades; Redis pub/sub shares queue,
+announcement, and feedback events across API instances.
 
 The staged GitHub Actions workflow publishes the frontend on pushes to `main`
 or `master`, after the backend readiness check passes. Enable GitHub Pages

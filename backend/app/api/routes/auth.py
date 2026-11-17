@@ -27,6 +27,7 @@ from ...db.session import get_db
 from ...models import (
     AuthSession,
     Organization,
+    Branch,
     PasswordResetToken,
     Queue,
     User,
@@ -76,7 +77,14 @@ def _requires_organization_approval(user: User) -> bool:
 
 
 def _inactive_account_detail(user: User) -> str:
-    if _requires_organization_approval(user):
+    if user.approval_pending:
+        if user.organization is not None and not user.organization.is_approved:
+            return _PENDING_ORGANIZATION_MESSAGE
+        if user.role is UserRole.STAFF:
+            return "Your staff account request is awaiting an organization administrator's approval."
+        if user.role is UserRole.ADMIN:
+            return "Your administrator account request is awaiting Super Admin approval."
+    if user.organization is not None and not user.organization.is_approved:
         return _PENDING_ORGANIZATION_MESSAGE
     return "This account has been disabled. Please contact support."
 
@@ -156,6 +164,18 @@ def register(
                 status_code=403,
                 detail="This organization is not accepting registrations.",
             )
+    if payload.branch_id is not None:
+        branch = db.get(Branch, payload.branch_id)
+        if (
+            branch is None
+            or not branch.is_active
+            or organization is None
+            or branch.organization_id != organization.id
+        ):
+            raise HTTPException(
+                status_code=422,
+                detail="Select an active branch within the selected organization.",
+            )
     elif payload.organization_name is not None:
         slug = _organization_slug(payload.organization_name)
         organization = db.scalar(
@@ -198,12 +218,14 @@ def register(
             db.flush()
             approval_pending = True
 
+    approval_pending = approval_pending or payload.requested_role is not UserRole.CUSTOMER
     user = User(
         full_name=payload.full_name,
         email=payload.email,
         password_hash=hash_password(payload.password),
         organization_id=organization.id if organization else None,
-        role=UserRole.CUSTOMER,
+        branch_id=payload.branch_id,
+        role=payload.requested_role,
         auth_provider="local",
         is_active=not approval_pending,
         approval_pending=approval_pending,
@@ -213,10 +235,22 @@ def register(
         if approval_pending:
             db.commit()
             response.status_code = status.HTTP_202_ACCEPTED
+            if organization is not None and not organization.is_approved:
+                approval_message = (
+                    "Your organization and account request are awaiting Super Admin approval."
+                )
+            elif payload.requested_role is UserRole.STAFF:
+                approval_message = (
+                    "Your staff account request is awaiting an organization administrator's approval."
+                )
+            else:
+                approval_message = (
+                    "Your administrator account request is awaiting Super Admin approval."
+                )
             return PendingOrganizationApprovalResponse(
                 email=user.email,
                 organization_name=organization.name if organization else "",
-                message=_PENDING_ORGANIZATION_MESSAGE,
+                message=approval_message,
             )
 
         now = datetime.now(timezone.utc)
@@ -555,6 +589,14 @@ async def create_websocket_ticket(
             detail="You are not authorized to receive updates for this queue.",
         )
     ticket = await cache.issue_websocket_ticket(str(user.id), str(queue.id))
+    return WebSocketTicketResponse(ticket=ticket)
+
+
+@router.post("/app-updates-ws-ticket", response_model=WebSocketTicketResponse)
+async def create_app_updates_websocket_ticket(
+    user: Annotated[User, Depends(get_current_user)],
+) -> WebSocketTicketResponse:
+    ticket = await cache.issue_websocket_ticket(str(user.id), "app_updates")
     return WebSocketTicketResponse(ticket=ticket)
 
 

@@ -6,8 +6,10 @@ export type RegisterPayload = {
   full_name: string;
   email: string;
   password: string;
+  requested_role?: "customer" | "staff" | "admin";
   organization_id?: string | null;
   organization_name?: string | null;
+  branch_id?: string | null;
 };
 
 export type PendingOrganizationApproval = {

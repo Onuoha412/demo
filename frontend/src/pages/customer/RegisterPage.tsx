@@ -1,25 +1,45 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 
 import { ApiError } from "../../services/api";
 import { register } from "../../services/auth";
+import { getBranches, getOrganizations } from "../../services/queue";
 import { useAuthStore } from "../../store/authStore";
 import { AuthLayout } from "../../components/auth/AuthLayout";
 import { PasswordInput } from "../../components/common/PasswordInput";
+import { roleHomePath } from "../../utils/roleRoutes";
+
+type RegistrationRole = "customer" | "staff" | "admin";
 
 export function RegisterPage() {
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams] = useSearchParams();
   const setAuth = useAuthStore((state) => state.setAuth);
+  const [registrationRole, setRegistrationRole] = useState<RegistrationRole>(() => {
+    const role = searchParams.get("role");
+    return role === "staff" || role === "admin" ? role : "customer";
+  });
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [rememberDevice, setRememberDevice] = useState(false);
   const [organizationName, setOrganizationName] = useState("");
+  const [organizationId, setOrganizationId] = useState("");
+  const [branchId, setBranchId] = useState("");
+  const organizations = useQuery({
+    queryKey: ["registration", "organizations"],
+    queryFn: getOrganizations,
+    enabled: registrationRole !== "customer",
+  });
+  const branches = useQuery({
+    queryKey: ["registration", "branches", organizationId],
+    queryFn: () => getBranches(organizationId),
+    enabled: registrationRole === "staff" && Boolean(organizationId),
+  });
   const [validationError, setValidationError] = useState<string | null>(null);
   const [pendingApprovalMessage, setPendingApprovalMessage] = useState<string | null>(null);
 
@@ -30,12 +50,15 @@ export function RegisterPage() {
         setPendingApprovalMessage(result.message);
         return;
       }
-      if (result.user.role !== "customer") {
-        setValidationError("Customer registration returned an unsupported account type.");
+      if (result.user.role !== registrationRole) {
+        setValidationError("Registration returned an unexpected account type.");
         return;
       }
       setAuth(result.user, result.session_token, rememberDevice);
-      const redirectTarget = (location.state as { from?: string } | null)?.from ?? searchParams.get("next") ?? "/services";
+      const redirectTarget =
+        (location.state as { from?: string } | null)?.from ??
+        searchParams.get("next") ??
+        (registrationRole === "customer" ? "/services" : roleHomePath(registrationRole));
       navigate(redirectTarget, { replace: true });
     },
   });
@@ -58,18 +81,70 @@ export function RegisterPage() {
       setValidationError("Passwords do not match.");
       return;
     }
+    if (registrationRole === "staff" && (!organizationId || !branchId)) {
+      setValidationError("Choose your organization and assigned branch.");
+      return;
+    }
+    if (
+      registrationRole === "admin" &&
+      !organizationId &&
+      !organizationName.trim()
+    ) {
+      setValidationError("Choose your organization or request a new one.");
+      return;
+    }
     setValidationError(null);
+    setPendingApprovalMessage(null);
     mutation.mutate({
       full_name: fullName,
       email,
       password,
-      organization_name: organizationName.trim() || null,
+      requested_role: registrationRole,
+      organization_id:
+        organizationId && organizationId !== "new" ? organizationId : null,
+      organization_name:
+        registrationRole === "customer" || organizationId === "new"
+          ? organizationName.trim() || null
+          : null,
+      branch_id: registrationRole === "staff" ? branchId : null,
     });
   };
 
   return (
-    <AuthLayout title="Create your account" subtitle="Join QueueLess and skip unnecessary waiting.">
+    <AuthLayout
+      title={registrationRole === "customer" ? "Create your account" : "Request an account"}
+      subtitle={
+        registrationRole === "customer"
+          ? "Join QueueLess and skip unnecessary waiting."
+          : "Your account will be enabled after the appropriate administrator approves your request."
+      }
+    >
       <form className="space-y-4" onSubmit={onSubmit}>
+        <label className="block text-sm font-semibold text-slate-700" htmlFor="register-role">
+          Account type
+          <select
+            id="register-role"
+            className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3 text-slate-900 shadow-sm"
+            value={registrationRole}
+            onChange={(event) => {
+              const value = event.target.value;
+              if (value !== "customer" && value !== "staff" && value !== "admin") {
+                return;
+              }
+              setRegistrationRole(value);
+              setOrganizationId("");
+              setBranchId("");
+              setOrganizationName("");
+              setValidationError(null);
+              setPendingApprovalMessage(null);
+            }}
+          >
+            <option value="customer">Customer</option>
+            <option value="staff">Staff member</option>
+            <option value="admin">Organization administrator</option>
+          </select>
+        </label>
+
         <label className="block text-sm font-semibold text-slate-700" htmlFor="register-name">
           Full name
           <input
@@ -119,23 +194,110 @@ export function RegisterPage() {
           />
         </label>
 
-        <label className="block text-sm font-semibold text-slate-700" htmlFor="register-organization">
-          Organization (optional)
-          <input
-            id="register-organization"
-            className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3 text-slate-900 shadow-sm transition focus:border-emerald-400 focus:bg-white focus:outline-none focus:ring-4 focus:ring-emerald-100"
-            autoComplete="organization"
-            maxLength={160}
-            value={organizationName}
-            onChange={(event) => {
-              setOrganizationName(event.target.value);
-              setPendingApprovalMessage(null);
-            }}
-          />
-          <span className="mt-1 block text-xs font-normal text-slate-500">
-            New organizations need administrator approval before their members can sign in.
-          </span>
-        </label>
+        {registrationRole === "customer" ? (
+          <label className="block text-sm font-semibold text-slate-700" htmlFor="register-organization">
+            Organization (optional)
+            <input
+              id="register-organization"
+              className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3 text-slate-900 shadow-sm transition focus:border-emerald-400 focus:bg-white focus:outline-none focus:ring-4 focus:ring-emerald-100"
+              autoComplete="organization"
+              maxLength={160}
+              value={organizationName}
+              onChange={(event) => {
+                setOrganizationName(event.target.value);
+                setPendingApprovalMessage(null);
+              }}
+            />
+            <span className="mt-1 block text-xs font-normal text-slate-500">
+              New organizations need Super Admin approval before members can sign in.
+            </span>
+          </label>
+        ) : (
+          <>
+            <label className="block text-sm font-semibold text-slate-700" htmlFor="register-organization">
+              Organization
+              <select
+                id="register-organization"
+                className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3 text-slate-900 shadow-sm"
+                value={organizationId}
+                onChange={(event) => {
+                  setOrganizationId(event.target.value);
+                  setBranchId("");
+                  setOrganizationName("");
+                  setPendingApprovalMessage(null);
+                }}
+                required
+              >
+                <option value="">
+                  {organizations.isLoading ? "Loading organizations..." : "Select your organization"}
+                </option>
+                {organizations.data?.map((organization) => (
+                  <option key={organization.id} value={organization.id}>
+                    {organization.name}
+                  </option>
+                ))}
+                {registrationRole === "admin" && (
+                  <option value="new">Request a new organization</option>
+                )}
+              </select>
+            </label>
+            {organizations.isError && (
+              <p className="text-sm text-red-600" role="alert">
+                Organizations could not be loaded.{" "}
+                <button className="font-bold underline" onClick={() => void organizations.refetch()} type="button">
+                  Retry
+                </button>
+              </p>
+            )}
+            {organizationId === "new" && (
+              <label className="block text-sm font-semibold text-slate-700" htmlFor="register-new-organization">
+                New organization name
+                <input
+                  id="register-new-organization"
+                  className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3 text-slate-900 shadow-sm"
+                  autoComplete="organization"
+                  maxLength={160}
+                  value={organizationName}
+                  onChange={(event) => setOrganizationName(event.target.value)}
+                  required
+                />
+              </label>
+            )}
+            {registrationRole === "staff" && organizationId && (
+              <label className="block text-sm font-semibold text-slate-700" htmlFor="register-branch">
+                Branch
+                <select
+                  id="register-branch"
+                  className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3.5 py-3 text-slate-900 shadow-sm"
+                  value={branchId}
+                  onChange={(event) => setBranchId(event.target.value)}
+                  required
+                >
+                  <option value="">
+                    {branches.isLoading ? "Loading branches..." : "Select your branch"}
+                  </option>
+                  {branches.data?.map((branch) => (
+                    <option key={branch.id} value={branch.id}>
+                      {branch.name}
+                    </option>
+                  ))}
+                </select>
+                {branches.isError && (
+                  <span className="mt-1 block text-sm font-normal text-red-600">
+                    Branches could not be loaded. Change the organization or retry.
+                  </span>
+                )}
+              </label>
+            )}
+            <p className="text-xs text-slate-500">
+              {registrationRole === "staff"
+                ? "An organization administrator must approve your staff account."
+                : organizationId === "new"
+                  ? "A Super Admin must approve the organization and administrator account."
+                  : "A Super Admin must approve your administrator account."}
+            </p>
+          </>
+        )}
         <label className="inline-flex items-center gap-2 text-sm text-slate-600">
           <input
             checked={rememberDevice}
@@ -156,23 +318,15 @@ export function RegisterPage() {
         )}
 
         <button className="w-full rounded-full bg-slate-900 px-4 py-3.5 text-base font-semibold text-white shadow-lg shadow-slate-900/10 transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-70" type="submit" disabled={mutation.isPending}>
-          {mutation.isPending ? "Creating account..." : "Create account"}
+          {mutation.isPending
+            ? "Submitting request..."
+            : registrationRole === "customer"
+              ? "Create account"
+              : registrationRole === "staff"
+                ? "Request staff account"
+                : "Request administrator account"}
         </button>
       </form>
-
-      {organizationName.trim() ? (
-        <p className="mt-5 text-center text-sm text-slate-500">
-          Use the registration form so your organization is linked to your account.
-        </p>
-      ) : (
-        <>
-          <div className="my-5 flex items-center gap-4 text-xs uppercase tracking-[0.2em] text-slate-400">
-            <span className="h-px flex-1 bg-slate-200" />
-            <span>or</span>
-            <span className="h-px flex-1 bg-slate-200" />
-          </div>
-        </>
-      )}
 
       <p className="mt-6 text-sm text-slate-600">
         Already have an account?{" "}

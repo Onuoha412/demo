@@ -11,6 +11,7 @@ import { useAuthStore } from "./store/authStore";
 import { roleHomePath } from "./utils/roleRoutes";
 import { me } from "./services/auth";
 import { ApiError } from "./services/api";
+import { useAppRealtime } from "./hooks/useAppRealtime";
 
 const LoginPage = lazy(() =>
   import("./pages/customer/LoginPage").then((module) => ({ default: module.LoginPage })),
@@ -161,22 +162,38 @@ function AuthSessionBootstrap() {
       return;
     }
     let active = true;
-    void me(token)
-      .then((user) => {
-      const remembered =
-        typeof localStorage !== "undefined" &&
-        localStorage.getItem("queueless.remembered") === token;
-      if (active) setAuth(user, token, remembered);
-      })
-      .catch((error: unknown) => {
+    let retryTimer: number | undefined;
+    let retryCount = 0;
+    const restore = async () => {
+      try {
+        const user = await me(token);
+        const remembered =
+          typeof localStorage !== "undefined" &&
+          localStorage.getItem("queueless.remembered") === token;
+        if (active) setAuth(user, token, remembered);
+      } catch (error: unknown) {
         if (!active) return;
-        logout();
-        if (!(error instanceof ApiError) || error.status !== 401) {
-          console.error("Unable to restore the QueueLess session.", error);
+        if (error instanceof ApiError && error.status === 401) {
+          logout();
+          return;
         }
-      });
+        console.error("Unable to restore the QueueLess session; retrying.", error);
+        retryTimer = window.setTimeout(
+          () => void restore(),
+          Math.min(30_000, 1_000 * 2 ** retryCount++),
+        );
+      }
+    };
+    const retryWhenOnline = () => {
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+      void restore();
+    };
+    window.addEventListener("online", retryWhenOnline);
+    void restore();
     return () => {
       active = false;
+      window.removeEventListener("online", retryWhenOnline);
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
     };
   }, [logout, setAuth, token]);
 
@@ -196,11 +213,18 @@ function SessionDataIsolation() {
   return null;
 }
 
+function AppRealtimeConnection() {
+  const token = useAuthStore((state) => state.token);
+  useAppRealtime(token);
+  return null;
+}
+
 export default function App() {
   return (
     <BrowserRouter basename={import.meta.env.BASE_URL}>
       <AuthSessionBootstrap />
       <SessionDataIsolation />
+      <AppRealtimeConnection />
       <div className="min-h-screen bg-cream text-ink">
         <Navbar />
         <FeedbackEntryPoint />

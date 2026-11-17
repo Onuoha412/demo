@@ -149,6 +149,36 @@ async def super_admin_socket(websocket: WebSocket) -> None:
         realtime.disconnect_super_admin(websocket)
 
 
+@router.websocket("/ws/app-updates")
+async def app_updates_socket(websocket: WebSocket) -> None:
+    ticket = websocket.query_params.get("ticket")
+    ticket_data = await cache.consume_websocket_ticket(ticket or "")
+    if not ticket_data or ticket_data.get("queue_id") != "app_updates":
+        await websocket.close(code=4401)
+        return
+    try:
+        user_id = UUID(ticket_data["user_id"])
+    except (KeyError, TypeError, ValueError):
+        await websocket.close(code=4401)
+        return
+
+    with SessionLocal() as db:
+        user = db.get(User, user_id)
+        if user is None or not user.is_active:
+            await websocket.close(code=4403)
+            return
+
+    if not await realtime.allow_app_updates_connection(user_id):
+        await websocket.close(code=4429)
+        return
+    await realtime.connect_app_updates(websocket, user_id)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        realtime.disconnect_app_updates(websocket)
+
+
 @router.websocket("/ws/announcements")
 async def announcements_socket(websocket: WebSocket) -> None:
     ticket = websocket.query_params.get("ticket")

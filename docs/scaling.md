@@ -32,21 +32,58 @@ account count, request rate, or latency.
 
 ## High-concurrency readiness
 
-The current application has not been load-tested or certified for 5 million
-simultaneously active users or 100k+ requests per second. Before scaling,
-operate PostgreSQL and Redis as managed shared services, use a load-balanced
-stateless API tier, configure database connection pooling (typically via
-PgBouncer where appropriate), profile queries and indexes, and run capacity
-tests using production-shaped queue, account, and event data. Durable event
-delivery, analytics isolation, and retention/partitioning still need
-workload-specific design.
+The deployment target is up to 750 simultaneously active users, not a limit on
+the number of stored accounts. The current Render blueprint's single starter
+instance and SQLite-compatible configuration are not certified for that
+concurrency. Use managed PostgreSQL and Redis, size the API and database
+connection pools for the selected plans, and add API instances only after
+verifying shared-state behavior and database limits. Do not treat increasing
+the instance count alone as evidence of capacity.
 
-Five million stored accounts is a data-volume requirement and is not equivalent
-to five million users making requests concurrently. Size and load-test account
-lookups, sessions, queue history, and backups against the expected record mix
-and traffic. No capacity claim should be made until repeatable tests establish
-throughput, latency, recovery, and error-rate targets on the selected host and
-database.
+`loadtests/queue.js` profile `E` exercises 750 virtual users against a shared
+queue using queue-join and queue-read requests. Run it only against an isolated
+deployment with disposable data:
+
+```sh
+PROFILE=E BASE_URL=https://isolated-api.example \
+QUEUE_ID=<isolated-queue-id> LOAD_TEST_PASSWORD=<test-only-password> \
+ISOLATED_TEST_TARGET=YES \
+k6 run loadtests/queue.js
+```
+
+Both scripts create 750 test customers during setup. Set the backend
+environment variable `AUTH_RATE_LIMIT_REGISTER=750` only on the isolated test
+deployment so registration is not blocked by the normal per-IP limit; restore
+the normal limit afterward. The HTTP profile does not test realtime connection
+capacity.
+
+`loadtests/websocket.js` opens 750 authenticated queue WebSocket sessions,
+keeps them connected for 90 seconds, and triggers a queue join after 30
+seconds. It checks connection success, session duration, and whether the queue
+update reaches the connected clients. Its default pass criteria require all
+750 socket handshakes, at least 99% event delivery, a p95 handshake below five
+seconds, and p95 session duration above 85 seconds. Run it separately, using
+an isolated queue and disposable database; it creates test accounts and one
+queue entry:
+
+```sh
+BASE_URL=https://isolated-api.example QUEUE_ID=<isolated-queue-id> \
+LOAD_TEST_PASSWORD=<test-only-password> ISOLATED_TEST_TARGET=YES \
+k6 run loadtests/websocket.js
+```
+
+Both load tests are test procedures, not evidence that the target has passed.
+This WebSocket profile has not been run against the selected production-
+equivalent host, and it does not certify production readiness. Measure
+API/database CPU and memory, connection-pool wait time, database contention,
+errors, p95 latency, queue update delivery, and recovery during the test.
+Repeat the tests at expected workload levels before claiming the 750-user
+realtime target is met.
+
+Capacity depends on the active workload, event rate, queue history, database
+and Redis plans, API resources, and host limits. No capacity claim should be
+made until repeatable tests establish the required latency, error-rate, and
+recovery targets on the selected production-equivalent infrastructure.
 
 ## Health, backups, and monitoring
 

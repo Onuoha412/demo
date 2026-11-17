@@ -118,4 +118,78 @@ it("filters users and lets an administrator create another administrator", async
       role: "admin",
     });
   });
+
+});
+
+it("lets an organization administrator approve a pending staff account", async () => {
+  const pendingStaff = {
+    ...existingUser,
+    id: "pending-staff",
+    full_name: "New Staff Member",
+    email: "pending-staff@example.test",
+    role: "staff",
+    organization_id: "org-1",
+    branch_id: "branch-1",
+    is_active: false,
+    approval_pending: true,
+    organization_approved: true,
+  };
+  useAuthStore.setState({
+    token: "admin-token",
+    user: {
+      id: "org-admin",
+      full_name: "Organization Admin",
+      email: "admin@example.test",
+      role: "admin",
+      organization_id: "org-1",
+      created_at: new Date().toISOString(),
+    },
+    ready: true,
+  });
+  const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
+    async (input, init) => {
+      const url = new URL(String(input), window.location.origin);
+      if (url.pathname.endsWith("/api/v1/admin/users/pending-staff/approve")) {
+        return Response.json({
+          ...pendingStaff,
+          is_active: true,
+          approval_pending: false,
+        });
+      }
+      if (url.pathname.endsWith("/api/v1/admin/users")) {
+        return Response.json({
+          items: [pendingStaff],
+          total: 1,
+          page: 1,
+          page_size: 20,
+        });
+      }
+      throw new Error(`Unexpected request: ${url.pathname} ${init?.method ?? "GET"}`);
+    },
+  );
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter initialEntries={["/admin/users"]}>
+        <Routes>
+          <Route path="/admin/:resource" element={<AdminResourcePage />} />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+
+  fireEvent.click(await screen.findByRole("button", { name: "Approve account" }));
+
+  await waitFor(() => {
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]) =>
+          new URL(String(input), window.location.origin).pathname.endsWith(
+            "/api/v1/admin/users/pending-staff/approve",
+          ) && init?.method === "POST",
+      ),
+    ).toBe(true);
+  });
 });

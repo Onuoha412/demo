@@ -21,6 +21,7 @@ from ...schemas.queue import (
     QueueRequestRejection,
     QueueRequestResponse,
 )
+from ...services.realtime import realtime
 from ...services.queue import QueueService
 
 router = APIRouter(tags=["queue requests"])
@@ -120,6 +121,12 @@ def create_queue_request(
     )
     db.add(item)
     db.commit()
+    realtime.publish_announcement_nowait(
+        "staff",
+        {"request_id": str(item.id), "branch_id": str(branch.id)},
+        "QUEUE_REQUEST_CREATED",
+        organization_id=str(branch.organization_id),
+    )
     return _response(_get_request(db, item.id))
 
 
@@ -250,6 +257,12 @@ def approve_queue_request(
     approved = QueueService(db).approve_queue_request(
         request_id, assigned_queue.id, user.id
     )
+    realtime.publish_announcement_nowait(
+        "staff",
+        {"request_id": str(approved.id), "branch_id": str(approved.branch_id)},
+        "QUEUE_REQUEST_UPDATED",
+        organization_id=str(assigned_branch.organization_id),
+    )
     return _response(_get_request(db, approved.id))
 
 
@@ -274,4 +287,12 @@ def reject_queue_request(
     item.reviewed_by_user_id = user.id
     item.reviewed_at = datetime.now(timezone.utc)
     db.commit()
+    branch = db.get(Branch, item.branch_id)
+    if branch is not None:
+        realtime.publish_announcement_nowait(
+            "staff",
+            {"request_id": str(item.id), "branch_id": str(branch.id)},
+            "QUEUE_REQUEST_UPDATED",
+            organization_id=str(branch.organization_id),
+        )
     return _response(_get_request(db, item.id))

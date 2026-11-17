@@ -179,6 +179,84 @@ it("shows that a custom organization registration is waiting for admin approval"
   });
 });
 
+it("submits a staff registration request for the selected organization and branch", async () => {
+  setPath("/register?role=staff");
+  const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    const url = new URL(String(input), window.location.origin);
+    if (url.pathname.endsWith("/api/v1/catalog/organizations")) {
+      return Response.json([
+        { id: "org-1", name: "Example Organization", slug: "example" },
+      ]);
+    }
+    if (url.pathname.endsWith("/api/v1/catalog/branches")) {
+      return Response.json([
+        {
+          id: "branch-1",
+          organization_id: "org-1",
+          name: "Main branch",
+          address: null,
+          timezone: "UTC",
+        },
+      ]);
+    }
+    if (url.pathname.endsWith("/api/v1/auth/register")) {
+      return Response.json(
+        {
+          status: "pending_approval",
+          email: "staff@example.com",
+          organization_name: "Example Organization",
+          message: "Your staff account request is awaiting an organization administrator's approval.",
+        },
+        { status: 202 },
+      );
+    }
+    throw new Error(`Unexpected request: ${url.pathname}`);
+  });
+  renderApp();
+
+  fireEvent.change(await screen.findByLabelText(/full name/i), {
+    target: { value: "New Staff Member" },
+  });
+  fireEvent.change(await screen.findByLabelText(/^email$/i), {
+    target: { value: "staff@example.com" },
+  });
+  fireEvent.change(await screen.findByLabelText(/^password$/i), {
+    target: { value: "staff-password" },
+  });
+  fireEvent.change(await screen.findByLabelText(/confirm password/i), {
+    target: { value: "staff-password" },
+  });
+  await screen.findByRole("option", { name: "Example Organization" });
+  fireEvent.change(await screen.findByLabelText(/^organization$/i), {
+    target: { value: "org-1" },
+  });
+  await screen.findByRole("option", { name: "Main branch" });
+  fireEvent.change(await screen.findByLabelText(/^branch$/i), {
+    target: { value: "branch-1" },
+  });
+  fireEvent.click(await screen.findByRole("button", { name: /request staff account/i }));
+
+  await waitFor(() => {
+    expect(
+      fetchMock.mock.calls.some(([input]) =>
+        String(input).endsWith("/api/v1/auth/register"),
+      ),
+    ).toBe(true);
+  });
+  expect(await screen.findByRole("status")).toHaveTextContent(
+    "awaiting an organization administrator's approval",
+  );
+  expect(sessionStorage.getItem("queueless.session")).toBeNull();
+  const registrationRequest = fetchMock.mock.calls.find(([input]) =>
+    String(input).endsWith("/api/v1/auth/register"),
+  );
+  expect(JSON.parse(String(registrationRequest?.[1]?.body))).toMatchObject({
+    requested_role: "staff",
+    organization_id: "org-1",
+    branch_id: "branch-1",
+  });
+});
+
 it("signs in a customer and stores the tab-scoped session", async () => {
   setPath("/login");
   mockFetchSequence([

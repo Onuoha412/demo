@@ -15,9 +15,10 @@ Queue state is persisted before these streams publish events. Queue mutations
 also append a versioned transactional-outbox record with an idempotency key and
 monotonic replay cursor. Reconnecting clients send their last cursor; the
 service replays retained events when the cursor is contiguous and sends an
-authoritative snapshot when replay is unavailable. WebSocket delivery remains
-process-local, so multi-instance deployment still requires a shared broker or
-database-backed fan-out worker. Production uses HTTPS, WSS, and revocable
+authoritative snapshot when replay is unavailable. Redis pub/sub shares queue,
+announcement, and feedback events across API instances when configured; without
+Redis, realtime delivery is limited to the connected API process. Production
+uses HTTPS, WSS, and revocable
 bearer sessions, so cross-origin requests do not depend on third-party
 cookies. In local development Vite proxies API and WebSocket paths to the
 FastAPI service.

@@ -1,4 +1,4 @@
-"""Process-local broadcasts to connected queue clients."""
+"""Realtime broadcasts to connected clients, shared through Redis when configured."""
 
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ class RealtimeManager:
             WebSocket, tuple[UUID, UUID | None, str]
         ] = {}
         self._super_admin_connections: set[WebSocket] = set()
+        self._app_update_connections: dict[WebSocket, UUID] = {}
         self._announcement_connections: dict[
             WebSocket, tuple[str, str | None]
         ] = {}
@@ -66,6 +67,7 @@ class RealtimeManager:
         self._connections.clear()
         self._feedback_connections.clear()
         self._super_admin_connections.clear()
+        self._app_update_connections.clear()
         self._announcement_connections.clear()
         self._loop = None
 
@@ -79,10 +81,41 @@ class RealtimeManager:
                 envelope = json.loads(message["data"])
                 if envelope.get("source") == self._instance_id:
                     continue
-                await self._broadcast(
-                    UUID(envelope["queue_id"]),
-                    envelope["message"],
-                )
+                kind = envelope.get("kind", "queue")
+                if kind == "queue":
+                    await self._broadcast(UUID(envelope["queue_id"]), envelope["message"])
+                elif kind == "announcement":
+                    await self._deliver_announcement(
+                        envelope["audience"],
+                        envelope["message"],
+                        envelope.get("organization_id"),
+                    )
+                elif kind == "feedback":
+                    await self._deliver_feedback(
+                        report_id=UUID(envelope["report_id"]),
+                        reporter_user_id=(
+                            UUID(envelope["reporter_user_id"])
+                            if envelope.get("reporter_user_id")
+                            else None
+                        ),
+                        assigned_user_id=(
+                            UUID(envelope["assigned_user_id"])
+                            if envelope.get("assigned_user_id")
+                            else None
+                        ),
+                        organization_id=(
+                            UUID(envelope["organization_id"])
+                            if envelope.get("organization_id")
+                            else None
+                        ),
+                        category=envelope["category"],
+                        event=envelope["event"],
+                        status=envelope["status"],
+                    )
+                elif kind == "app_update":
+                    await self._deliver_app_change(envelope["message"])
+                else:
+                    raise ValueError("Unsupported realtime broadcast kind")
             except (KeyError, TypeError, ValueError, json.JSONDecodeError):
                 sentry_sdk.capture_message(
                     "QueueLess received an invalid realtime broadcast",
@@ -95,6 +128,60 @@ class RealtimeManager:
 
     def disconnect_super_admin(self, websocket: WebSocket) -> None:
         self._super_admin_connections.discard(websocket)
+
+    async def connect_app_updates(
+        self, websocket: WebSocket, user_id: UUID
+    ) -> None:
+        await websocket.accept()
+        self._app_update_connections[websocket] = user_id
+
+    def disconnect_app_updates(self, websocket: WebSocket) -> None:
+        self._app_update_connections.pop(websocket, None)
+
+    async def publish_app_change(self) -> None:
+        message = {"event": "app.data_changed"}
+        await self._deliver_app_change(message)
+        if self._redis is not None:
+            await self._redis.publish(
+                settings.realtime_pubsub_channel,
+                json.dumps(
+                    {
+                        "source": self._instance_id,
+                        "kind": "app_update",
+                        "message": message,
+                    }
+                ),
+            )
+
+    async def _deliver_app_change(self, message: dict[str, Any]) -> None:
+        sockets = list(self._app_update_connections)
+        if not sockets:
+            return
+        results = await asyncio.gather(
+            *(socket.send_json(message) for socket in sockets),
+            return_exceptions=True,
+        )
+        for socket, result in zip(sockets, results):
+            if isinstance(result, Exception):
+                sentry_sdk.capture_message(
+                    "QueueLess app update delivery failed",
+                    level="warning",
+                )
+                self.disconnect_app_updates(socket)
+
+    def publish_app_change_nowait(self) -> None:
+        def schedule() -> None:
+            task = asyncio.create_task(self.publish_app_change())
+            self._publish_tasks.add(task)
+            task.add_done_callback(self._publish_tasks.discard)
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            if self._loop is not None and not self._loop.is_closed():
+                self._loop.call_soon_threadsafe(schedule)
+            return
+        schedule()
 
     async def connect_announcements(
         self,
@@ -115,6 +202,28 @@ class RealtimeManager:
         event: str,
         organization_id: str | None = None,
     ) -> None:
+        message = {"event": event, "data": jsonable_encoder(data)}
+        await self._deliver_announcement(audience, message, organization_id)
+        if self._redis is not None:
+            await self._redis.publish(
+                settings.realtime_pubsub_channel,
+                json.dumps(
+                    {
+                        "source": self._instance_id,
+                        "kind": "announcement",
+                        "audience": audience,
+                        "organization_id": organization_id,
+                        "message": message,
+                    }
+                ),
+            )
+
+    async def _deliver_announcement(
+        self,
+        audience: str,
+        message: dict[str, Any],
+        organization_id: str | None = None,
+    ) -> None:
         recipients = [
             socket
             for socket, (role, subscriber_organization_id) in
@@ -132,9 +241,6 @@ class RealtimeManager:
                 )
             )
         ]
-        if not recipients:
-            return
-        message = {"event": event, "data": jsonable_encoder(data)}
         results = await asyncio.gather(
             *(socket.send_json(message) for socket in recipients),
             return_exceptions=True,
@@ -184,6 +290,50 @@ class RealtimeManager:
         self._feedback_connections.pop(websocket, None)
 
     async def publish_feedback(
+        self,
+        *,
+        report_id: UUID,
+        reporter_user_id: UUID | None,
+        assigned_user_id: UUID | None,
+        organization_id: UUID | None,
+        category: str,
+        event: str,
+        status: str,
+    ) -> None:
+        await self._deliver_feedback(
+            report_id=report_id,
+            reporter_user_id=reporter_user_id,
+            assigned_user_id=assigned_user_id,
+            organization_id=organization_id,
+            category=category,
+            event=event,
+            status=status,
+        )
+        if self._redis is not None:
+            await self._redis.publish(
+                settings.realtime_pubsub_channel,
+                json.dumps(
+                    {
+                        "source": self._instance_id,
+                        "kind": "feedback",
+                        "report_id": str(report_id),
+                        "reporter_user_id": (
+                            str(reporter_user_id) if reporter_user_id else None
+                        ),
+                        "assigned_user_id": (
+                            str(assigned_user_id) if assigned_user_id else None
+                        ),
+                        "organization_id": (
+                            str(organization_id) if organization_id else None
+                        ),
+                        "category": category,
+                        "event": event,
+                        "status": status,
+                    }
+                ),
+            )
+
+    async def _deliver_feedback(
         self,
         *,
         report_id: UUID,
@@ -285,6 +435,7 @@ class RealtimeManager:
                 json.dumps(
                     {
                         "source": self._instance_id,
+                        "kind": "queue",
                         "queue_id": str(queue_id),
                         "message": message,
                     }
@@ -333,6 +484,13 @@ class RealtimeManager:
     async def allow_feedback_connection(self, user_id: UUID) -> bool:
         return await cache.increment_with_limit(
             f"queueless:feedback:{user_id}:connections",
+            limit=20,
+            window_seconds=60,
+        )
+
+    async def allow_app_updates_connection(self, user_id: UUID) -> bool:
+        return await cache.increment_with_limit(
+            f"queueless:app-updates:{user_id}:connections",
             limit=20,
             window_seconds=60,
         )

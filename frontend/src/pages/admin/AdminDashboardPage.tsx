@@ -9,10 +9,13 @@ import { useAuthStore } from "../../store/authStore";
 import { downloadAdminQueueReport, getAdminAnalytics } from "../../services/admin";
 import { StatsCard } from "../../components/staff/StatsCard";
 import { QueueRequestReviewPanel } from "../../components/queue/QueueRequestReviewPanel";
+import { QueueRealtimeSubscriptions } from "../../components/common/QueueRealtimeSubscriptions";
+import { AnnouncementFeed } from "../../components/common/AnnouncementFeed";
 import { getAdminQueueOptions } from "../../services/queueRequests";
 
 export function AdminDashboardPage() {
   const token = useAuthStore((s) => s.token)!;
+  const user = useAuthStore((s) => s.user);
   const queryClient = useQueryClient();
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
@@ -81,7 +84,7 @@ export function AdminDashboardPage() {
       setReportState("error");
     }
   };
-  return <PageContainer className="py-10"><div className="flex flex-wrap items-end justify-between gap-3"><h1 className="text-4xl font-black">Admin dashboard</h1><p className="text-sm text-ink/60" aria-live="polite">Updated {new Date(query.dataUpdatedAt).toLocaleTimeString()}</p></div>
+  return <PageContainer className="py-10"><AnnouncementFeed />{queues.data && <QueueRealtimeSubscriptions queueIds={queues.data.items.map((queue) => queue.id)} token={token} />}<div className="flex flex-wrap items-end justify-between gap-3"><div><h1 className="text-4xl font-black">Admin dashboard</h1><p className="mt-1 text-sm text-ink/60">Welcome back, {user?.full_name.split(" ")[0]}.</p></div><p className="text-sm text-ink/60" aria-live="polite">Updated {new Date(query.dataUpdatedAt).toLocaleTimeString()}</p></div>
     <form className="mt-5 flex flex-wrap items-end gap-3 rounded-2xl border border-ink/10 bg-white p-4" onSubmit={applyDateRange}>
       <label className="grid gap-1 text-sm font-semibold">From<input aria-label="Analytics start date" className="rounded-lg border p-2" type="date" value={startDate} onChange={(event) => setStartDate(event.target.value)}/></label>
       <label className="grid gap-1 text-sm font-semibold">To<input aria-label="Analytics end date" className="rounded-lg border p-2" type="date" value={endDate} onChange={(event) => setEndDate(event.target.value)}/></label>

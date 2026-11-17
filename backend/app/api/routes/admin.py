@@ -219,6 +219,7 @@ def approve_organization(
     for user in pending_users:
         user.approval_pending = False
         user.is_active = True
+        _sync_organization_membership(db, user, admin.id)
     db.add(organization)
     db.add_all(pending_users)
     record_audit(
@@ -672,7 +673,44 @@ def list_users(
                 cast(User.id, String).ilike(search_pattern),
             )
         )
-    return _page(User, db, page, page_size, *filters, admin=admin)
+    result = _page(User, db, page, page_size, *filters, admin=admin)
+    organization_ids: set[UUID] = set()
+    user_organization_ids: dict[str, UUID] = {}
+    for item in result.items:
+        organization_id = item["organization_id"]
+        if organization_id is None:
+            continue
+        try:
+            normalized_id = (
+                organization_id
+                if isinstance(organization_id, UUID)
+                else UUID(str(organization_id))
+            )
+        except (TypeError, ValueError):
+            continue
+        organization_ids.add(normalized_id)
+        user_organization_ids[str(organization_id)] = normalized_id
+    organization_status = (
+        dict(
+            db.execute(
+                select(Organization.id, Organization.is_approved).where(
+                    Organization.id.in_(organization_ids)
+                )
+            ).all()
+        )
+        if organization_ids
+        else {}
+    )
+    for item in result.items:
+        organization_id = user_organization_ids.get(
+            str(item["organization_id"])
+        )
+        item["organization_approved"] = (
+            organization_status.get(organization_id)
+            if organization_id is not None
+            else None
+        )
+    return result
 
 
 @router.post("/users", response_model=AdminUserResponse, status_code=status.HTTP_201_CREATED)
@@ -731,6 +769,61 @@ def create_user(
         details={"email": user.email, "role": user.role.value},
     )
     return _save(db, user)
+
+
+@router.post("/users/{item_id}/approve", response_model=AdminUserResponse)
+def approve_user_registration(
+    item_id: UUID,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_admin),
+):
+    item = _get(db, User, item_id, admin)
+    if item.role not in (UserRole.STAFF, UserRole.ADMIN):
+        raise HTTPException(
+            status_code=409,
+            detail="Only staff or administrator registration requests can be approved.",
+        )
+    if not item.approval_pending:
+        raise HTTPException(
+            status_code=409,
+            detail="This account does not have a pending registration request.",
+        )
+    if item.role is UserRole.ADMIN and admin.role is not UserRole.SUPER_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Only a Super Admin can approve organization administrator requests.",
+        )
+    organization = (
+        db.get(Organization, item.organization_id)
+        if item.organization_id is not None
+        else None
+    )
+    if organization is None or not organization.is_active or not organization.is_approved:
+        raise HTTPException(
+            status_code=409,
+            detail="Approve and activate the organization before approving this account.",
+        )
+    if item.role is UserRole.STAFF and (
+        item.branch_id is None
+        or item.branch is None
+        or not item.branch.is_active
+        or item.branch.organization_id != organization.id
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Assign this staff account to an active branch before approval.",
+        )
+
+    item.approval_pending = False
+    item.is_active = True
+    _sync_organization_membership(db, item, admin.id)
+    return _save(
+        db,
+        item,
+        admin=admin,
+        action="user.registration_approved",
+        details={"role": item.role.value},
+    )
 
 
 @router.get("/users/{item_id}", response_model=AdminUserResponse)

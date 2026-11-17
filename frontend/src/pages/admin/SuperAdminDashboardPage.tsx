@@ -16,6 +16,7 @@ import {
 } from "../../services/superAdmin";
 import { WS_BASE } from "../../services/api";
 import { useAuthStore } from "../../store/authStore";
+import { startWebSocketHeartbeat } from "../../utils/websocketHeartbeat";
 
 const sections = [
   ["users", "Users"],
@@ -28,6 +29,7 @@ const sections = [
 
 export function SuperAdminDashboardPage() {
   const token = useAuthStore((state) => state.token)!;
+  const user = useAuthStore((state) => state.user);
   const queryClient = useQueryClient();
   const [initialSetupCompleted, setInitialSetupCompleted] = useState(false);
   const [realtimeStatus, setRealtimeStatus] = useState<
@@ -38,6 +40,7 @@ export function SuperAdminDashboardPage() {
     let socket: WebSocket | null = null;
     let retryTimer: number | undefined;
     let retryCount = 0;
+    let stopHeartbeat = () => {};
 
     const reconnect = () => {
       if (stopped) return;
@@ -56,7 +59,10 @@ export function SuperAdminDashboardPage() {
         socket = new WebSocket(
           `${WS_BASE}/ws/super-admin?${new URLSearchParams({ ticket })}`,
         );
+        const activeSocket = socket;
         socket.onopen = () => {
+          stopHeartbeat();
+          stopHeartbeat = startWebSocketHeartbeat(activeSocket);
           retryCount = 0;
           setRealtimeStatus("connected");
           void queryClient.invalidateQueries({
@@ -68,7 +74,11 @@ export function SuperAdminDashboardPage() {
             queryKey: ["super-admin-dashboard"],
           });
         };
-        socket.onclose = () => reconnect();
+        socket.onclose = () => {
+          stopHeartbeat();
+          stopHeartbeat = () => {};
+          reconnect();
+        };
         socket.onerror = () => {
           setRealtimeStatus("reconnecting");
           socket?.close();
@@ -82,6 +92,7 @@ export function SuperAdminDashboardPage() {
     return () => {
       stopped = true;
       if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+      stopHeartbeat();
       socket?.close();
     };
   }, [queryClient, token]);
@@ -132,6 +143,9 @@ export function SuperAdminDashboardPage() {
             Global control center
           </p>
           <h1 className="text-4xl font-black">Super Admin</h1>
+          <p className="mt-1 text-sm text-ink/60">
+            Welcome back, {user?.full_name.split(" ")[0] ?? "Admin"}.
+          </p>
         </div>
         <p className="text-sm text-ink/60" aria-live="polite">
           Live totals · updated {new Date(dashboard.dataUpdatedAt).toLocaleTimeString()}

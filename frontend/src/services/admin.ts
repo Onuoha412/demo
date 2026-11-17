@@ -158,6 +158,14 @@ export function approveAdminOrganization(id: string, token: string) {
   );
 }
 
+export function approveAdminUser(id: string, token: string) {
+  return apiRequest(
+    `/api/v1/admin/users/${encodeURIComponent(id)}/approve`,
+    { method: "POST" },
+    token,
+  );
+}
+
 export function createAdminResource(resource: AdminResource, payload: Record<string, unknown>, token: string) {
   return apiRequest(`/api/v1/admin/${resource}`, { method: "POST", body: JSON.stringify(payload) }, token);
 }

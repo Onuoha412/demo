@@ -8,6 +8,7 @@ import {
   getPublishedAnnouncements,
 } from "../../services/operations";
 import { WS_BASE } from "../../services/api";
+import { startWebSocketHeartbeat } from "../../utils/websocketHeartbeat";
 
 export function AnnouncementFeed() {
   const token = useAuthStore((state) => state.token);
@@ -28,6 +29,7 @@ export function AnnouncementFeed() {
     let socket: WebSocket | null = null;
     let retryTimer: number | undefined;
     let retryCount = 0;
+    let stopHeartbeat = () => {};
 
     const reconnect = () => {
       if (stopped) return;
@@ -43,15 +45,33 @@ export function AnnouncementFeed() {
         socket = new WebSocket(
           `${WS_BASE}/ws/announcements?${new URLSearchParams({ ticket })}`,
         );
+        const activeSocket = socket;
         socket.onopen = () => {
+          stopHeartbeat();
+          stopHeartbeat = startWebSocketHeartbeat(activeSocket);
           retryCount = 0;
           setConnection("connected");
           void queryClient.invalidateQueries({ queryKey: ["announcements", "published"] });
         };
-        socket.onmessage = () => {
+        socket.onmessage = (message) => {
           void queryClient.invalidateQueries({ queryKey: ["announcements", "published"] });
+          try {
+            const event = JSON.parse(message.data) as { event?: unknown };
+            if (
+              typeof event.event === "string" &&
+              event.event.startsWith("QUEUE_REQUEST_")
+            ) {
+              void queryClient.invalidateQueries({ queryKey: ["queue-requests"] });
+            }
+          } catch (error) {
+            console.error("Unable to read a QueueLess announcement event.", error);
+          }
         };
-        socket.onclose = reconnect;
+        socket.onclose = () => {
+          stopHeartbeat();
+          stopHeartbeat = () => {};
+          reconnect();
+        };
         socket.onerror = () => socket?.close();
       } catch {
         reconnect();
@@ -62,6 +82,7 @@ export function AnnouncementFeed() {
     return () => {
       stopped = true;
       if (retryTimer !== undefined) window.clearTimeout(retryTimer);
+      stopHeartbeat();
       socket?.close();
     };
   }, [queryClient, token]);

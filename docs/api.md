@@ -8,6 +8,15 @@ All application APIs are served under `/api/v1`.
 
 ## Account settings
 
+`POST /api/v1/auth/register` accepts `requested_role` values `customer`,
+`staff`, or `admin` (default `customer`). Customer accounts can sign in
+immediately. Staff requests require an active organization and branch and stay
+inactive until an organization administrator approves them with
+`POST /api/v1/admin/users/{user_id}/approve`. Organization administrator
+requests stay inactive until a Super Admin approves them through the same
+endpoint. Requests for a new organization require Super Admin approval of the
+organization first. Public registration cannot create Super Admin accounts.
+
 Authenticated users can update their display name with
 `PATCH /api/v1/auth/me` (`full_name`). The server derives the account and role
 from the active session and records the change in the audit log.

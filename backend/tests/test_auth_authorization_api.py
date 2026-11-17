@@ -2,10 +2,13 @@ import uuid
 import secrets
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
+
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.api.auth_dependencies import get_current_user, get_db
 from app.auth.sessions import hash_opaque_token, new_session
 from app.core.security import create_access_token, hash_password, verify_password
@@ -15,6 +18,7 @@ from app.models import (
     Branch,
     Counter,
     Organization,
+    OrganizationMembership,
     PasswordResetToken,
     Queue,
     QueueEntry,
@@ -432,6 +436,168 @@ def test_new_organization_requires_admin_approval_before_customer_login(
         existing_organization_registration.json()["user"]["organization_id"]
         == str(organization.id)
     )
+
+
+def test_staff_and_admin_registration_require_the_appropriate_approval(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "auth_rate_limit_register", 1000)
+    branch, _, _ = make_queue(db_session)
+    organization = branch.organization
+    staff_admin = make_user("registration-approver", UserRole.ADMIN, branch)
+    staff_admin.organization_id = organization.id
+    db_session.add(staff_admin)
+    db_session.flush()
+    db_session.add(
+        OrganizationMembership(
+            user_id=staff_admin.id,
+            organization_id=organization.id,
+            role=UserRole.ADMIN.value,
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    def override_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_db
+    client = TestClient(app)
+    staff_email = f"{uuid.uuid4()}@example.test"
+    staff_registration = client.post(
+        "/api/v1/auth/register",
+        json={
+            "full_name": "Requested Staff",
+            "email": staff_email,
+            "password": "staff-password",
+            "requested_role": "staff",
+            "organization_id": str(organization.id),
+            "branch_id": str(branch.id),
+        },
+    )
+    assert staff_registration.status_code == 202
+    assert "organization administrator" in staff_registration.json()["message"]
+    staff = db_session.scalar(select(User).where(User.email == staff_email))
+    assert staff is not None
+    assert staff.role is UserRole.STAFF and not staff.is_active and staff.approval_pending
+    assert client.post(
+        "/api/v1/auth/login",
+        json={"email": staff_email, "password": "staff-password"},
+    ).status_code == 403
+
+    app.dependency_overrides[get_current_user] = lambda: staff_admin
+    staff_approval = client.post(f"/api/v1/admin/users/{staff.id}/approve")
+    assert staff_approval.status_code == 200
+    db_session.refresh(staff)
+    assert staff.is_active and not staff.approval_pending
+
+    admin_email = f"{uuid.uuid4()}@example.test"
+    admin_registration = client.post(
+        "/api/v1/auth/register",
+        json={
+            "full_name": "Requested Administrator",
+            "email": admin_email,
+            "password": "admin-password",
+            "requested_role": "admin",
+            "organization_id": str(organization.id),
+        },
+    )
+    assert admin_registration.status_code == 202
+    requested_admin = db_session.scalar(
+        select(User).where(User.email == admin_email)
+    )
+    assert requested_admin is not None
+    assert (
+        requested_admin.role is UserRole.ADMIN
+        and not requested_admin.is_active
+        and requested_admin.approval_pending
+    )
+    assert client.post(
+        f"/api/v1/admin/users/{requested_admin.id}/approve"
+    ).status_code == 403
+    app.dependency_overrides.pop(get_current_user)
+
+    super_admin = db_session.scalar(
+        select(User).where(User.role == UserRole.SUPER_ADMIN)
+    )
+    if super_admin is None:
+        super_admin = make_user("registration-super-admin", UserRole.SUPER_ADMIN)
+        db_session.add(super_admin)
+        db_session.commit()
+    auth_session, session_token = new_session(super_admin)
+    db_session.add(auth_session)
+    db_session.commit()
+    client.headers["Authorization"] = f"Bearer {session_token}"
+    approval = client.post(f"/api/v1/admin/users/{requested_admin.id}/approve")
+    assert approval.status_code == 200
+    db_session.refresh(requested_admin)
+    membership = db_session.get(
+        OrganizationMembership,
+        (requested_admin.id, organization.id),
+    )
+    assert requested_admin.is_active and not requested_admin.approval_pending
+    assert membership is not None and membership.is_active
+
+    new_organization_email = f"{uuid.uuid4()}@example.test"
+    new_organization_request = client.post(
+        "/api/v1/auth/register",
+        json={
+            "full_name": "New Organization Administrator",
+            "email": new_organization_email,
+            "password": "new-organization-password",
+            "requested_role": "admin",
+            "organization_name": "A New QueueLess Organization",
+        },
+    )
+    assert new_organization_request.status_code == 202
+    new_organization = db_session.scalar(
+        select(Organization).where(
+            Organization.slug == "a-new-queueless-organization"
+        )
+    )
+    new_organization_admin = db_session.scalar(
+        select(User).where(User.email == new_organization_email)
+    )
+    assert new_organization is not None and new_organization_admin is not None
+    organization_approval = client.post(
+        f"/api/v1/admin/organizations/{new_organization.id}/approve"
+    )
+    assert organization_approval.status_code == 200
+    db_session.refresh(new_organization_admin)
+    new_membership = db_session.get(
+        OrganizationMembership,
+        (new_organization_admin.id, new_organization.id),
+    )
+    assert new_organization_admin.is_active
+    assert new_membership is not None and new_membership.is_active
+
+
+def test_public_registration_cannot_request_super_admin_or_unassigned_staff(
+    db_session: Session,
+) -> None:
+    def override_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_db
+    client = TestClient(app)
+    base_payload = {
+        "full_name": "Registration Applicant",
+        "email": f"{uuid.uuid4()}@example.test",
+        "password": "registration-password",
+    }
+
+    super_admin = client.post(
+        "/api/v1/auth/register",
+        json={**base_payload, "requested_role": "super_admin"},
+    )
+    assert super_admin.status_code == 422
+
+    unassigned_staff = client.post(
+        "/api/v1/auth/register",
+        json={**base_payload, "requested_role": "staff"},
+    )
+    assert unassigned_staff.status_code == 422
 
 
 def test_profile_update_and_password_change_are_authenticated_and_revoke_other_sessions(

@@ -68,6 +68,9 @@ export function StaffLoginPage() {
         <span className="h-px flex-1 bg-slate-200" />
       </div>
       <Link to="/login" className="mt-5 inline-block text-sm font-semibold text-emerald-700">Customer sign in</Link>
+      <Link to="/register?role=staff" className="mt-3 block text-sm font-semibold text-emerald-700">
+        Request a staff account
+      </Link>
     </AuthLayout>
   );
 }

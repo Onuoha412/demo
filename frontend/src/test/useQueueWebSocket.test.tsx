@@ -15,7 +15,7 @@ class TestWebSocket {
     TestWebSocket.instance = this;
   }
 
-  close() {}
+  close = vi.fn();
 
   connect() {
     this.onopen?.(new Event("open"));
@@ -53,6 +53,66 @@ it("refetches queue-backed queries when the socket reconnects", async () => {
     queryKey: ["public-queue", "queue-1"],
   });
   unmount();
+});
+
+it("starts queue event replay from scratch when switching queues", async () => {
+  vi.stubGlobal("WebSocket", TestWebSocket);
+  const queryClient = new QueryClient();
+  const wrapper = ({ children }: PropsWithChildren) => (
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  );
+  const { rerender, unmount } = renderHook(
+    ({ queueId }: { queueId: string }) => useQueueWebSocket(queueId),
+    { initialProps: { queueId: "queue-1" }, wrapper },
+  );
+
+  await waitFor(() => expect(TestWebSocket.instance).toBeDefined());
+  act(() => {
+    TestWebSocket.instance?.onmessage?.({
+      data: JSON.stringify({
+        event: "QUEUE_UPDATED",
+        queue_id: "queue-1",
+        event_sequence: 42,
+      }),
+    } as MessageEvent);
+  });
+
+  rerender({ queueId: "queue-2" });
+  await waitFor(() =>
+    expect(new URL(TestWebSocket.instance!.url).pathname).toBe(
+      "/ws/queues/queue-2",
+    ),
+  );
+  expect(new URL(TestWebSocket.instance!.url).searchParams.has("since")).toBe(
+    false,
+  );
+
+  unmount();
+});
+
+it("keeps an idle but healthy queue connection open", async () => {
+  vi.stubGlobal("WebSocket", TestWebSocket);
+  const queryClient = new QueryClient();
+  const wrapper = ({ children }: PropsWithChildren) => (
+    <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+  );
+  const { result, unmount } = renderHook(
+    () => useQueueWebSocket("queue-1"),
+    { wrapper },
+  );
+
+  await waitFor(() => expect(TestWebSocket.instance).toBeDefined());
+  act(() => TestWebSocket.instance?.connect());
+  await waitFor(() => expect(result.current.status).toBe("connected"));
+  const socket = TestWebSocket.instance!;
+
+  vi.useFakeTimers();
+  act(() => vi.advanceTimersByTime(61_000));
+
+  expect(socket.close).not.toHaveBeenCalled();
+  expect(result.current.status).toBe("connected");
+  unmount();
+  vi.useRealTimers();
 });
 
 it("uses randomized exponential backoff when reconnecting", async () => {

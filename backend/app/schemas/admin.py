@@ -177,6 +177,7 @@ class AdminUserResponse(BaseModel):
     last_login_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    organization_approved: bool | None = None
 
     model_config = {"from_attributes": True}
 

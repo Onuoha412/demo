@@ -7,6 +7,7 @@ import { ErrorState } from "../../components/common/ErrorState";
 import { AnnouncementFeed } from "../../components/common/AnnouncementFeed";
 import { LoadingState } from "../../components/common/LoadingState";
 import { PageContainer } from "../../components/common/PageContainer";
+import { QueueRealtimeSubscriptions } from "../../components/common/QueueRealtimeSubscriptions";
 import {
   CurrentCustomerCard,
   QueueStatusBadge,
@@ -34,6 +35,7 @@ type StaffQueueAction = "call" | "start" | "complete" | "skip";
 
 export function StaffDashboardPage() {
   const token = useAuthStore((state) => state.token)!;
+  const user = useAuthStore((state) => state.user);
   const client = useQueryClient();
   const location = useLocation();
   const customerView = location.pathname.endsWith("/customers");
@@ -68,9 +70,13 @@ export function StaffDashboardPage() {
     availableCounters[0]?.id ??
     "";
   const queueId = summary?.id;
-  const connection = useQueueWebSocket(
-    customerView || historyView ? undefined : queueId,
-    token,
+  const connection = useQueueWebSocket(queueId, token);
+  const realtimeSubscriptions = (
+    <QueueRealtimeSubscriptions
+      queueIds={queues.map((item) => item.id)}
+      token={token}
+      excludeQueueId={queueId}
+    />
   );
   const queue = useQuery({
     queryKey: ["staff-queue", queueId],
@@ -151,6 +157,7 @@ export function StaffDashboardPage() {
   if (customerView) {
     return (
       <PageContainer className="py-10">
+        {realtimeSubscriptions}
         <AnnouncementFeed />
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
@@ -218,6 +225,7 @@ export function StaffDashboardPage() {
   if (historyView) {
     return (
       <PageContainer className="py-10">
+        {realtimeSubscriptions}
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
             <p className="text-sm text-ink/60">{dashboard.data?.branch?.name}</p>
@@ -296,10 +304,14 @@ export function StaffDashboardPage() {
 
   return (
     <PageContainer className="py-10">
+      {realtimeSubscriptions}
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <p className="text-sm text-ink/60">{dashboard.data.branch?.name}</p>
           <h1 className="text-4xl font-black">Staff dashboard</h1>
+          <p className="mt-1 text-sm text-ink/60">
+            Welcome back, {user?.full_name.split(" ")[0]}.
+          </p>
           <p className="mt-1 text-xs text-ink/50" aria-live="polite">
             Updated {new Date(dashboard.dataUpdatedAt).toLocaleTimeString()}
           </p>

@@ -8,6 +8,7 @@ import { Button } from "../../components/common/Button";
 import {
   createAdminResource,
   approveAdminOrganization,
+  approveAdminUser,
   listAdminResource,
   setAdminQueueStatus,
   setAdminResourceActive,
@@ -144,6 +145,12 @@ function AdminResourceContent({ resource }: { resource: AdminResource }) {
     mutationFn: (id: string) => approveAdminOrganization(id, token),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: ["admin", "organizations"] });
+      void client.invalidateQueries({ queryKey: ["admin", "users"] });
+    },
+  });
+  const accountApproval = useMutation({
+    mutationFn: (id: string) => approveAdminUser(id, token),
+    onSuccess: () => {
       void client.invalidateQueries({ queryKey: ["admin", "users"] });
     },
   });
@@ -348,7 +355,7 @@ function AdminResourceContent({ resource }: { resource: AdminResource }) {
         </form>
       )}
 
-      {(save.isError || toggle.isError || status.isError || approval.isError) && (
+      {(save.isError || toggle.isError || status.isError || approval.isError || accountApproval.isError) && (
         <div className="mt-4" role="alert">
           <ErrorState message="The change could not be saved. Check the entered values and try again." />
         </div>
@@ -372,6 +379,11 @@ function AdminResourceContent({ resource }: { resource: AdminResource }) {
                 resource === "organizations" && row.is_approved === false;
               const accountPending =
                 resource === "users" && row.approval_pending === true;
+              const canApproveAccount =
+                accountPending &&
+                row.organization_approved !== false &&
+                (row.role === "staff" ||
+                  (row.role === "admin" && currentUser?.role === "super_admin"));
               return (
                 <tr className="border-t" key={id}>
                   <td className="p-4 font-semibold">
@@ -420,6 +432,14 @@ function AdminResourceContent({ resource }: { resource: AdminResource }) {
                         onClick={() => approval.mutate(id)}
                       >
                         {approval.isPending ? "Approving..." : "Approve organization"}
+                      </Button>
+                    )}
+                    {canApproveAccount && (
+                      <Button
+                        disabled={accountApproval.isPending}
+                        onClick={() => accountApproval.mutate(id)}
+                      >
+                        {accountApproval.isPending ? "Approving..." : "Approve account"}
                       </Button>
                     )}
                     {active !== undefined && !organizationPending && !accountPending && (

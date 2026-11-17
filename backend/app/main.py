@@ -184,6 +184,18 @@ def create_app() -> FastAPI:
     application.add_middleware(GZipMiddleware, minimum_size=500)
 
     @application.middleware("http")
+    async def broadcast_successful_writes(request: Request, call_next) -> Response:
+        response = await call_next(request)
+        if (
+            request.method in {"POST", "PUT", "PATCH", "DELETE"}
+            and request.url.path.startswith("/api/v1/")
+            and not request.url.path.endswith("-ws-ticket")
+            and 200 <= response.status_code < 300
+        ):
+            realtime.publish_app_change_nowait()
+        return response
+
+    @application.middleware("http")
     async def capture_server_errors(request: Request, call_next) -> Response:
         if (
             production

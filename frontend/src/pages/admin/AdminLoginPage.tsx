@@ -67,6 +67,9 @@ export function AdminLoginPage() {
         <span>or</span>
         <span className="h-px flex-1 bg-slate-200" />
       </div>
+      <Link to="/register?role=admin" className="mt-5 inline-block text-sm font-semibold text-emerald-700">
+        Request an administrator account
+      </Link>
     </AuthLayout>
   );
 }

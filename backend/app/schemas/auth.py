@@ -14,8 +14,10 @@ class RegisterRequest(BaseModel):
         pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$",
     )
     password: str = Field(min_length=8, max_length=128)
+    requested_role: UserRole = UserRole.CUSTOMER
     organization_id: UUID | None = None
     organization_name: str | None = Field(default=None, min_length=2, max_length=160)
+    branch_id: UUID | None = None
 
     @field_validator("full_name")
     @classmethod
@@ -44,6 +46,20 @@ class RegisterRequest(BaseModel):
     def validate_organization_choice(self) -> "RegisterRequest":
         if self.organization_id is not None and self.organization_name is not None:
             raise ValueError("Choose an organization ID or organization name, not both")
+        if self.requested_role is UserRole.SUPER_ADMIN:
+            raise ValueError("Super Admin accounts cannot be self-registered")
+        if self.requested_role is UserRole.STAFF and (
+            self.organization_id is None or self.branch_id is None
+        ):
+            raise ValueError("Staff registration requires an organization and branch")
+        if self.requested_role is UserRole.STAFF and self.organization_name is not None:
+            raise ValueError("Staff registration must select an existing organization")
+        if self.requested_role is UserRole.ADMIN and (
+            self.organization_id is None and self.organization_name is None
+        ):
+            raise ValueError("Administrator registration requires an organization")
+        if self.requested_role is not UserRole.STAFF and self.branch_id is not None:
+            raise ValueError("Only staff accounts can select a branch")
         return self
 
 
